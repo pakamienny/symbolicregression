@@ -47,46 +47,12 @@ def main(params):
         params.eval_dump_path = Path(params.dump_path) / "evals_all"
         if not os.path.isdir(params.eval_dump_path):
             os.makedirs(params.eval_dump_path)
+
     env = build_env(params)
 
     modules = build_modules(env, params)
     trainer = Trainer(modules, env, params)
     evaluator = Evaluator(trainer)
-
-    # training
-    if params.reload_data != "":
-        data_types = [
-            "valid{}".format(i) for i in range(1, len(trainer.data_path["functions"]))
-        ]
-    else:
-        data_types = ["valid1"]
-    evaluator.set_env_copies(data_types)
-
-    # evaluation
-    if params.eval_only:
-        if params.eval_in_domain:
-            scores = evaluator.evaluate_in_domain(
-                "valid1",
-                "functions",
-                logger=logger,
-                save=params.save_results,
-                ablation_to_keep=params.ablation_to_keep,
-            )
-            logger.info("__log__:%s" % json.dumps(scores))
-
-        if params.eval_on_pmlb:
-            feynman_scores = evaluator.evaluate_pmlb(
-                filter_fn=lambda x: x["dataset"].str.contains("feynman")
-            )
-            logger.info("__feynman__:%s" % json.dumps(feynman_scores))
-
-            filter_fn = lambda x: ~(
-                x["dataset"].str.contains("strogatz")
-                | x["dataset"].str.contains("feynman")
-            )
-            black_box_scores = evaluator.evaluate_pmlb(filter_fn=filter_fn)
-            logger.info("__black_box__:%s" % json.dumps(black_box_scores))
-        exit()
 
     trainer.n_equations = 0
     for _ in range(params.max_epoch):
@@ -100,9 +66,9 @@ def main(params):
             for task_id in np.random.permutation(len(params.tasks)):
                 task = params.tasks[task_id]
                 if params.export_data:
-                    trainer.export_data(task)
+                    trainer.export_data()
                 else:
-                    trainer.enc_dec_step(task)
+                    trainer.enc_dec_step()
                 trainer.iter()
 
         logger.info("============ End of epoch %i ============" % trainer.epoch)

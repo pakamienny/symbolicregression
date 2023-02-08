@@ -4,16 +4,15 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 #
-from typing import Tuple, List
+from typing import Tuple, List, Dict
 from abc import ABC, abstractmethod
+import numpy as np
 import torch
 import torch.nn as nn
 from symbolicregression.utils import to_cuda
 import torch.nn.functional as F
 
-MultiDimensionalFloat = List[float]
-XYPair = Tuple[MultiDimensionalFloat, MultiDimensionalFloat]
-Sequence = List[XYPair]
+Dataset = Tuple[np.ndarray, np.ndarray]
 
     
 class Embedder(ABC, nn.Module):
@@ -26,11 +25,11 @@ class Embedder(ABC, nn.Module):
         pass
 
     @abstractmethod
-    def forward(self, sequences: List[Sequence]) -> Tuple[torch.Tensor, torch.Tensor]:
+    def forward(self, datasets: List[Dataset]) -> Tuple[torch.Tensor, torch.Tensor]:
         pass
 
     @abstractmethod
-    def encode(self, sequences: List[Sequence]) -> List[torch.Tensor]:
+    def encode(self, datasets: List[Dataset]) -> List[torch.Tensor]:
         pass
 
     def batch(self, seqs: List[torch.Tensor]) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -40,107 +39,96 @@ class Embedder(ABC, nn.Module):
         raise NotImplementedError
 
     @abstractmethod
-    def get_length_after_batching(self, sequences: List[Sequence]) -> List[int]:
+    def get_length_after_batching(self, datasets: List[Dataset]) -> List[int]:
         pass
 
-class LinearPointEmbedder(Embedder):
-    def __init__(self, params, env):
+class FlatEmbedder(Embedder):
+    def __init__(self, float_tokenizer, word2id: Dict[str, int], dim: int, use_cpu: bool = False):
         from .transformer import Embedding
 
         super().__init__()
-        self.env = env
-        self.params = params
-        self.input_dim = params.emb_emb_dim
-        self.output_dim = params.enc_emb_dim
+        assert word2id["<EOS>"] == 0 and word2id["<PAD>"] == 1
+        self.use_cpu = use_cpu
+        self.float_tokenizer = float_tokenizer
+        self.word2id = word2id
         self.embeddings = Embedding(
-            len(self.env.float_id2word),
-            self.input_dim,
-            padding_idx=self.env.float_word2id["<PAD>"],
+            len(word2id),
+            dim,
+            padding_idx=1,
         )
-        self.float_scalar_descriptor_len = (2 + self.params.mantissa_len)
-        self.total_dimension = self.params.max_input_dimension + self.params.max_output_dimension
-        self.float_vector_descriptor_len = self.float_scalar_descriptor_len * self.total_dimension
+        self.positional_embeddings = Embedding(13, dim, padding_idx=1) #10 for dimensions, 1 for output, 1 for <PAD> and 1 for <EOS>
+        self.float_positional_embeddings = Embedding(5, dim, padding_idx=1) #s,m,e + eos+pad
+        if not use_cpu:
+            self.embeddings = self.embeddings.cuda()
+            self.positional_embeddings = self.positional_embeddings.cuda()
+            self.float_positional_embeddings = self.float_positional_embeddings.cuda()
 
-        self.activation_fn = F.relu
-        size = self.float_vector_descriptor_len*self.input_dim
-        hidden_size = size * self.params.emb_expansion_factor
-        self.hidden_layers = nn.ModuleList()
-        self.hidden_layers.append(nn.Linear(size, hidden_size))
-        for i in range(self.params.n_emb_layers-1):
-            self.hidden_layers.append(nn.Linear(hidden_size, hidden_size))
-        self.fc = nn.Linear(hidden_size, self.output_dim)
-        self.max_seq_len = self.params.max_len
+    def forward(self, datasets: List[Dataset]) -> Tuple[torch.Tensor, torch.Tensor]:
+        encoded_datasets, positional_tokens, float_positional_tokens = self.encode(datasets)
+        batch_datasets, batch_len = self.batch(encoded_datasets)
+        batch_positionals, _ = self.batch(positional_tokens)
+        batch_float_positionals, _ = self.batch(float_positional_tokens)
+        batch_datasets, batch_positionals, batch_float_positionals, batch_len = to_cuda(
+            batch_datasets, batch_positionals, batch_float_positionals, batch_len, use_cpu=self.use_cpu
+        )
+        dataset_embeddings = self.embed(batch_datasets, batch_positionals, batch_float_positionals)
+        return dataset_embeddings, batch_len
 
-    def compress(
-        self, sequences_embeddings: torch.Tensor
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """
-        Takes: (N_max * (d_in+d_out)*(2+mantissa_len), B, d) tensors
-        Returns: (N_max, B, d)
-        """
-        max_len, bs, float_descriptor_length, dim = sequences_embeddings.size()
-        sequences_embeddings = sequences_embeddings.view(max_len, bs, -1)
-        for layer in self.hidden_layers: sequences_embeddings = self.activation_fn(layer(sequences_embeddings))
-        sequences_embeddings = self.fc(sequences_embeddings)
-        return sequences_embeddings
+    def encode(self, datasets: List[Dataset]) -> Tuple[List[torch.Tensor], List[torch.Tensor], List[torch.Tensor]]:
+        datasets_toks = []
+        datasets_positional_toks = []
+        datasets_float_positional_toks = []
 
-    def forward(self, sequences: List[Sequence]) -> Tuple[torch.Tensor, torch.Tensor]:
-        sequences = self.encode(sequences)
-        sequences, sequences_len = self.batch(sequences)
-        sequences, sequences_len = to_cuda(sequences, sequences_len, use_cpu=self.fc.weight.device.type=="cpu")
-        sequences_embeddings = self.embed(sequences)
-        sequences_embeddings = self.compress(sequences_embeddings)
-        return sequences_embeddings, sequences_len
+        for dataset in datasets:
+            dataset_toks = []
+            dataset_positional_toks = []
+            dataset_float_positional_toks = []
 
-    def encode(self, sequences: List[Sequence]) -> List[torch.Tensor]:
-        res = []
-        for seq in sequences:
-            seq_toks = []
-            for x, y in seq:
-                x_toks = self.env.float_encoder.encode(x)
-                y_toks = self.env.float_encoder.encode(y)
-                input_dim = int(len(x_toks) / (2 + self.params.mantissa_len))
-                output_dim = int(len(y_toks) / (2 + self.params.mantissa_len))
-                x_toks = [
-                    *x_toks,
-                    *[
-                        "<INPUT_PAD>"
-                        for _ in range(
-                            (self.params.max_input_dimension - input_dim)
-                            * self.float_scalar_descriptor_len
-                        )
-                    ],
-                ]
-                y_toks = [
-                    *y_toks,
-                    *[
-                        "<OUTPUT_PAD>"
-                        for _ in range(
-                            (self.params.max_output_dimension - output_dim)
-                            * self.float_scalar_descriptor_len
-                        )
-                    ],
-                ]
-                toks = [*x_toks, *y_toks]
-                seq_toks.append([self.env.float_word2id[tok] for tok in toks])
-            res.append(torch.LongTensor(seq_toks))
-        return res
+            for observation in dataset:
+                obs_toks = []
+                obs_positional_toks = []
+                obs_float_positional_toks = []
+                for i, d in enumerate(observation):
+                    encoded_d = self.float_tokenizer.encode(d)
+                    obs_toks.extend([self.word2id[e] for e in encoded_d])
+                    obs_positional_toks.extend([i for j in range(len(encoded_d))])
+                    obs_float_positional_toks.extend([j for j in range(len(encoded_d))])
+                dataset_toks.extend(obs_toks)
+                dataset_positional_toks.extend(obs_positional_toks)
+                dataset_float_positional_toks.extend(obs_float_positional_toks)
+            datasets_toks.append(torch.LongTensor(dataset_toks))
+            datasets_positional_toks.append(2+torch.LongTensor(dataset_positional_toks))
+            datasets_float_positional_toks.append(2+torch.LongTensor(dataset_float_positional_toks))
+
+        return datasets_toks, datasets_positional_toks, datasets_float_positional_toks
 
     def batch(self, seqs: List[torch.Tensor]) -> Tuple[torch.Tensor, torch.Tensor]:
-        pad_id = self.env.float_word2id["<PAD>"]
-        lengths = [len(x) for x in seqs]
-        bs, slen = len(lengths), max(lengths)
-        sent = torch.LongTensor(slen, bs, self.float_vector_descriptor_len).fill_(pad_id)
+        lengths = torch.LongTensor([2+len(x) for x in seqs])
+        sent = torch.LongTensor(lengths.max().item(), lengths.size(0)).fill_(self.word2id["<PAD>"])
+        sent[0] = self.word2id["<EOS>"]
         for i, seq in enumerate(seqs):
-            sent[0 : len(seq), i, :] = seq
-        return sent, torch.LongTensor(lengths)
+            sent[1 : lengths[i] - 1, i] = seq
+            sent[lengths[i] - 1, i] = self.word2id["<EOS>"]
+        return sent, lengths
 
-    def embed(self, batch: torch.Tensor) -> torch.Tensor:
-        return self.embeddings(batch)
+    def embed(self, batch_datasets: torch.LongTensor, batch_positionals: torch.LongTensor, batch_float_positionals: torch.LongTensor) -> torch.Tensor:
+        return self.embeddings(batch_datasets) + self.positional_embeddings(batch_positionals) + self.float_positional_embeddings(batch_float_positionals)
 
-    def get_length_after_batching(self, seqs: List[Sequence]) -> torch.Tensor:
+    def get_length_after_batching(self, seqs: List[Dataset]) -> torch.Tensor:
         lengths = torch.zeros(len(seqs), dtype=torch.long)
         for i, seq in enumerate(seqs):
-            lengths[i] = len(seq)
+            if self.pad_to_max_dim:
+                sep, d_in, d_out = (
+                    0,
+                    self.params.max_input_dimension,
+                    self.params.max_output_dimension,
+                )
+            else:
+                x, y = seq[0]
+                sep, d_in, d_out = 2, len(x), len(y)
+            lengths[i] = len(seq) * (
+                (2 + self.params.mantissa_len) * (d_in + d_out) + sep
+            )
         assert lengths.max() <= self.max_seq_len, "issue with lengths after batching"
         return lengths
+

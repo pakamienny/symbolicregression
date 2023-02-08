@@ -5,7 +5,6 @@
 # LICENSE file in the root directory of this source tree.
 
 import argparse
-from symbolicregression.envs import ENVS
 from symbolicregression.utils import bool_flag
 
 
@@ -14,7 +13,7 @@ def get_parser():
     Generate a parameters parser.
     """
     # parse parameters
-    parser = argparse.ArgumentParser(description="Function prediction", add_help=False)
+    parser = argparse.ArgumentParser(description="SR", add_help=False)
 
     # main parameters
     parser.add_argument(
@@ -264,12 +263,10 @@ def get_parser():
 
     # environment parameters
     parser.add_argument(
-        "--env_name", type=str, default="functions", help="Environment name"
+        "--env_name", type=str, default="sr", help="Environment name"
     )
-    ENVS[parser.parse_known_args()[0].env_name].register_args(parser)
-
     # tasks
-    parser.add_argument("--tasks", type=str, default="functions", help="Tasks")
+    parser.add_argument("--tasks", type=str, default="sr", help="Tasks")
 
     # beam search configuration
     parser.add_argument(
@@ -420,4 +417,29 @@ def get_parser():
     parser.add_argument(
         "--nvidia_apex", type=bool_flag, default=False, help="NVIDIA version of apex"
     )
+
+    parser.add_argument(
+        "--queue_strategy",
+        type=str,
+        default="uniform_sampling",
+        help="in [precompute_batches, uniform_sampling, uniform_sampling_replacement]",
+    )
+
+    parser.add_argument("--collate_queue_size", type=int, default=2000)
+    parser.add_argument(
+            "--tokens_per_batch",
+            type=int,
+            default=10000,
+            help="max number of tokens per batch",
+        )        
+    parser.add_argument(
+            "--max_token_len",
+            type=int,
+            default=0,
+            help="max size of tokenized sentences, 0 is no filtering",
+        )
     return parser
+
+default_params = get_parser().parse_args(args=[])
+if __name__ == "__main__":
+    print(default_params)

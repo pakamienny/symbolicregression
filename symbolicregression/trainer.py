@@ -23,7 +23,7 @@ import torch.nn.functional as F
 import seaborn as sns
 import matplotlib.pyplot as plt
 import copy
-
+from symbolicregression.envs.new_environment import create_train_iterator, batch_expressions
 # if torch.cuda.is_available():
 has_apex = True
 try:
@@ -179,9 +179,6 @@ class Trainer(object):
         self.stats = OrderedDict(
             [("processed_e", 0)]
             + [("processed_w", 0)]
-            + sum(
-                [[(x, []), (f"{x}-AVG-STOP-PROBS", [])] for x in env.TRAINING_TASKS], []
-            )
         )
         self.last_time = time.time()
 
@@ -211,14 +208,7 @@ class Trainer(object):
                 # and all(len(x) == 4 for x in s) ##if we want multiple datasets
                 # and len(s) == len(set([x[0] for x in s]))
             )
-            self.data_path = {
-                task: (
-                    train_path if train_path != "" else None,
-                    valid_path if valid_path != "" else None,
-                    test_path if test_path != "" else None,
-                )
-                for task, train_path, valid_path, test_path in s
-            }
+            self.data_path = ""
 
             logger.info(self.data_path)
 
@@ -229,16 +219,15 @@ class Trainer(object):
             for task in self.env.TRAINING_TASKS:
                 assert (task in self.data_path) == (task in params.tasks)
         else:
-            self.data_path = None
+            self.data_path = ""
 
         # create data loaders
         if not params.eval_only:
             if params.env_base_seed < 0:
                 params.env_base_seed = np.random.randint(1_000_000_000)
-            self.dataloader = {
-                task: iter(self.env.create_train_iterator(task, self.data_path, params))
-                for task in params.tasks
-            }
+
+            self.dataloader = iter(create_train_iterator(self.env, self.data_path, params))
+        
 
     def set_new_train_iterator_params(self, args={}):
         params = self.params
@@ -261,10 +250,11 @@ class Trainer(object):
         """
         self.parameters = {}
         named_params = []
-        for v in self.modules.values():
-            named_params.extend(
-                [(k, p) for k, p in v.named_parameters() if p.requires_grad]
-            )
+        for name, v in self.modules.items():
+            if name.endswith("_module"):
+                named_params.extend(
+                    [(k, p) for k, p in v.named_parameters() if p.requires_grad]
+                )
         self.parameters["model"] = [p for k, p in named_params]
         for k, v in self.parameters.items():
             logger.info("Found %i parameters in %s." % (len(v), k))
@@ -628,12 +618,12 @@ class Trainer(object):
         self.save_checkpoint("checkpoint")
         self.epoch += 1
 
-    def get_batch(self, task):
+    def get_batch(self):
         """
         Return a training batch for a specific task.
         """
         try:
-            batch, errors = next(self.dataloader[task])
+            batch = next(self.dataloader)
         except Exception as e:
             print(e)
             logger.error(
@@ -649,7 +639,7 @@ class Trainer(object):
                 else:
                     logger.warning("Not the master process, no need to requeue.")
             raise
-        return batch, errors
+        return batch
 
     def export_data(self, task):
         """
@@ -702,50 +692,35 @@ class Trainer(object):
         self.total_samples += self.params.batch_size
         self.stats["processed_e"] += len(samples)
 
-    def enc_dec_step(self, task):
+    def enc_dec_step(self):
         """
         Encoding / decoding step.
         """
         params = self.params
         embedder, encoder, decoder = (
             self.modules["embedder"],
-            self.modules["encoder"],
-            self.modules["decoder"],
+            self.modules["encoder_module"],
+            self.modules["decoder_module"],
         )
-        embedder.train()
+        input_tokenizer, output_tokenizer = (
+            self.modules["input_tokenizer"],
+            self.modules["output_tokenizer"],
+        )
+        #embedder.train()
         encoder.train()
         decoder.train()
         env = self.env
 
-        samples, errors = self.get_batch(task)
+        samples = self.get_batch()
+       
+        expressions = samples["expression"]
+        x = samples["x"]
+        y = samples["y"]
 
-        if self.params.debug_train_statistics:
-            for info_type, info in samples["infos"].items():
-                self.infos_statistics[info_type].append(info)
-            for error_type, count in errors.items():
-                self.errors_statistics[error_type] += count
+        datasets = [np.concatenate([yi[:, None], xi], 1) for xi, yi in zip(x, y)] 
+        x1, len1 = embedder(datasets)
+        x2, len2 = batch_expressions(output_tokenizer, decoder.word2id, expressions)
 
-        x_to_fit = samples["x_to_fit"]
-        y_to_fit = samples["y_to_fit"]
-
-        x1 = []
-        for seq_id in range(len(x_to_fit)):
-            x1.append([])
-            for seq_l in range(len(x_to_fit[seq_id])):
-                x1[seq_id].append([x_to_fit[seq_id][seq_l], y_to_fit[seq_id][seq_l]])
-
-        x1, len1 = embedder(x1)
-
-        if self.params.use_skeleton:
-            x2, len2 = self.env.batch_equations(
-                self.env.word_to_idx(
-                    samples["skeleton_tree_encoded"], float_input=False
-                )
-            )
-        else:
-            x2, len2 = self.env.batch_equations(
-                self.env.word_to_idx(samples["tree_encoded"], float_input=False)
-            )
 
         # target words to predict
         alen = torch.arange(len2.max(), dtype=torch.long, device=len2.device)
@@ -758,7 +733,7 @@ class Trainer(object):
         # cuda
         x2, len2, y = to_cuda(x2, len2, y)
         # forward / loss
-
+        print(x1.shape)
         if params.amp == -1 or params.nvidia_apex:
             encoded = encoder("fwd", x=x1, lengths=len1, causal=False)
             decoded = decoder(
@@ -790,7 +765,6 @@ class Trainer(object):
                     y=y,
                     get_scores=False,
                 )
-        self.stats[task].append(loss.item())
 
         # optimize
         self.optimize(loss)
