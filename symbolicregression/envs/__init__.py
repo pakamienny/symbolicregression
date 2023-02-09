@@ -6,9 +6,9 @@
 
 from logging import getLogger
 from symbolicregression_env.envs import ExpressionGenerator, ExpressionGeneratorArgs
+from symbolicregression.envs.new_environment import create_test_iterator, create_train_iterator
 
 logger = getLogger()
-
 
 
 def build_env(params):

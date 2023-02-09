@@ -48,7 +48,7 @@ class ModelWrapper(nn.Module):
 
     @torch.no_grad()
     def forward(
-        self, input,
+        self, inputs,
     ):
 
         """

@@ -169,7 +169,7 @@ def get_parser():
     parser.add_argument(
         "--batch_size_eval",
         type=int,
-        default=64,
+        default=1,
         help="Number of sentences per batch during evaluation (if None, set to 1.5*batch_size)",
     )
     parser.add_argument(
@@ -327,6 +327,8 @@ def get_parser():
         "--reload_checkpoint", type=str, default="", help="Reload a checkpoint"
     )
 
+
+
     # evaluation
     parser.add_argument(
         "--validation_metrics",
@@ -349,7 +351,7 @@ def get_parser():
         help="Should we evaluate with additional output noise",
     )
     parser.add_argument(
-        "--eval_size", type=int, default=10000, help="Size of valid and test samples"
+        "--eval_size", type=int, default=10, help="Size of valid and test samples"
     )
     parser.add_argument(
         "--eval_noise_type",
@@ -438,6 +440,25 @@ def get_parser():
             default=0,
             help="max size of tokenized sentences, 0 is no filtering",
         )
+    parser.add_argument(
+        "--n_observations",
+        type=int,
+        default=200,
+        help="max number of observations",
+    )
+    parser.add_argument(
+        "--max_ops",
+        type=int,
+        default=25,
+        help="max number of operators",
+    )
+    parser.add_argument(
+        "--max_vars",
+        type=int,
+        default=5,
+        help="max number of variables",
+    )
+
     return parser
 
 default_params = get_parser().parse_args(args=[])

@@ -53,7 +53,7 @@ def build_modules(env, params):
 
     output_id2word = {i: s for i, s in enumerate(output_symbols)}
 
-    modules["embedder"] = FlatEmbedder(float_tokenizer, input_word2id, 512) #LinearPointEmbedder(params, env)
+    modules["embedder_module"] = FlatEmbedder(float_tokenizer, word2id=input_word2id, dim=params.enc_emb_dim, use_cpu=params.cpu) #LinearPointEmbedder(params, env)
     #env.get_length_after_batching = modules["embedder"].get_length_after_batching
 
     modules["encoder_module"] = TransformerModel(

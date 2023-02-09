@@ -8,40 +8,10 @@ import math, time, copy
 import numpy as np
 import torch
 from collections import defaultdict
-from symbolicregression.metrics import compute_metrics
 from sklearn.base import BaseEstimator
 import symbolicregression.model.utils_wrapper as utils_wrapper
 import traceback
 from sklearn import feature_selection 
-
-def corr(X, y, epsilon=1e-10):
-    """
-    X : shape n*d
-    y : shape n
-    """
-    cov = (y @ X)/len(y) - y.mean()*X.mean(axis=0)
-    corr = cov / (epsilon + X.std(axis=0) * y.std())
-    return corr
-
-def get_top_k_features(X, y, k=10):
-    if y.ndim==2:
-        y=y[:,0]
-    if X.shape[1]<=k:
-        return [i for i in range(X.shape[1])]
-    else:
-        kbest = feature_selection.SelectKBest(feature_selection.r_regression, k=k)
-        kbest.fit(X, y)
-        scores = kbest.scores_
-        #scores = corr(X, y)
-        top_features = np.argsort(-np.abs(scores))
-        print("keeping only the top-{} features. Order was {}".format(k, top_features))
-        return list(top_features[:k])
-
-def exchange_node_values(tree, dico):
-    new_tree = copy.deepcopy(tree)
-    for (old, new) in dico.items():
-        new_tree.replace_node_value(old, new)
-    return new_tree
 
 class SymbolicTransformerRegressor(BaseEstimator):
 
@@ -68,49 +38,14 @@ class SymbolicTransformerRegressor(BaseEstimator):
 
     def fit(
         self,
-        X,
-        Y,
+        x,
+        y,
         verbose=False
     ):
+        datasets = [np.concatenate([yi[:, None], xi], 1) for xi, yi in zip(x, y)] 
+
         self.start_fit = time.time()
-
-        if not isinstance(X, list):
-            X = [X]
-            Y = [Y]
-        n_datasets = len(X)
-
-        self.top_k_features = [None for _ in range(n_datasets)]
-        for i in range(n_datasets):
-            self.top_k_features[i] = get_top_k_features(X[i], Y[i], k=self.model.env.params.max_input_dimension)
-            X[i] = X[i][:, self.top_k_features[i]]
-    
-        scaler = utils_wrapper.StandardScaler() if self.rescale else None
-        scale_params = {}
-        if scaler is not None:
-            scaled_X = []
-            for i, x in enumerate(X):
-                scaled_X.append(scaler.fit_transform(x))
-                scale_params[i]=scaler.get_params()
-        else:
-            scaled_X = X
-
-        inputs, inputs_ids = [], []
-        for seq_id in range(len(scaled_X)):
-            for seq_l in range(len(scaled_X[seq_id])):
-                y_seq = Y[seq_id]
-                if len(y_seq.shape)==1:
-                    y_seq = np.expand_dims(y_seq,-1)
-                if seq_l%self.max_input_points == 0:
-                    inputs.append([])
-                    inputs_ids.append(seq_id)
-                inputs[-1].append([scaled_X[seq_id][seq_l], y_seq[seq_l]])
-
-        if self.max_number_bags>0:
-            inputs = inputs[:self.max_number_bags]
-            inputs_ids = inputs_ids[:self.max_number_bags]
-
-        forward_time=time.time()
-        outputs = self.model(inputs)  ##Forward transformer: returns predicted functions
+        outputs = self.model(datasets)  ##Forward transformer: returns predicted functions
         if verbose: print("Finished forward in {} secs".format(time.time()-forward_time))
 
         candidates = defaultdict(list)

@@ -31,24 +31,11 @@ from torch.utils.data import DataLoader
 import collections
 import math
 import scipy
+import random, string
 
-SPECIAL_WORDS = [
-    "<EOS>",
-    "<X>",
-    "</X>",
-    "<Y>",
-    "</Y>",
-    "</POINTS>",
-    "<INPUT_PAD>",
-    "<OUTPUT_PAD>",
-    "<PAD>",
-    "(",
-    ")",
-    "SPECIAL",
-    "OOD_unary_op",
-    "OOD_binary_op",
-    "OOD_constant",
-]
+def rstr(length: int = 6) -> str:
+    return "".join(random.choice(string.ascii_letters) for _ in range(length))
+
 logger = getLogger()
 
 SKIP_ITEM = "SKIP_ITEM"
@@ -74,9 +61,15 @@ def create_train_iterator(env, data_path, params, **args):
     """
     logger.info(f"Creating train iterator")
 
+    def size_fn(sample):
+        return sample["x"].shape[0] * (sample["x"].shape[1]+1)*3 
+    
+
+   # size_fn = lambda batch: batch
     dataset = EnvDataset(
         env=env,
         train=True,
+        size_fn=size_fn,
         params=params,
         path=data_path,
         skip=params.queue_strategy is not None,
@@ -87,7 +80,7 @@ def create_train_iterator(env, data_path, params, **args):
     else:
         collate_fn = dataset.collate_reduce_padding(
                 dataset.collate_fn,
-                key_fn=lambda data: data["x"].shape[0]*data["x"].shape[1],
+                key_fn=size_fn,
                 max_size=None
             )
 
@@ -104,23 +97,52 @@ def create_train_iterator(env, data_path, params, **args):
         collate_fn=collate_fn,
     )
 
+def create_test_iterator(env, data_path, params, **args):
+    """
+    Create a dataset for this environment.
+    """
+    logger.info(f"Creating test iterator")
+
+   # size_fn = lambda batch: batch
+    dataset = EnvDataset(
+        env=env,
+        train=False,
+        size_fn=None,
+        params=params,
+        path=data_path,
+        size=params.eval_size,
+        skip=False,
+        **args,
+    )
+    collate_fn = dataset.collate_fn   
+
+    return DataLoader(
+        dataset,
+        timeout=0,
+        batch_size=params.batch_size_eval,
+        num_workers=1,
+        shuffle=False,
+        collate_fn=collate_fn,
+    )
+
 
 class EnvDataset(Dataset):
     def __init__(
         self,
         env,
         params,
+        size_fn,
         train: bool = True,
         path: str = "",
         skip=False,
         size=None,
         type=None,
-        input_length_modulo=-1,
         **args,
     ):
         super(EnvDataset).__init__()
         self.env = env
         self.train=train
+        self.size_fn = size_fn
         self.skip = skip
         self.batch_size = params.batch_size
         self.env_base_seed = params.env_base_seed
@@ -128,18 +150,8 @@ class EnvDataset(Dataset):
         self.count = 0
         self.remaining_data = 0
         self.type = type
-        self.input_length_modulo = input_length_modulo
         self.params = params
         self.errors = defaultdict(int)
-
-        if "test_env_seed" in args:
-            self.test_env_seed = args["test_env_seed"]
-        else:
-            self.test_env_seed = None
-        if "env_info" in args:
-            self.env_info = args["env_info"]
-        else:
-            self.env_info = None
 
         assert not params.batch_load or params.reload_size > 0
         # batching
@@ -191,18 +203,16 @@ class EnvDataset(Dataset):
         if self.train:
             self.size = 1 << 60
         elif size is None:
-            self.size = 10000 if path is None else len(self.data)
+            self.size = 10000 if path == "" else len(self.data)
         else:
             assert size > 0
             self.size = size
 
-    def collate_size_fn(self, batch: Dict) -> int:
-        if len(batch) == 0:
+    def collate_size_fn(self, batch) -> int:
+        if len(batch) == 0: 
             return 0
-        return len(batch) * max(
-            [seq["x"].shape[0] for seq in batch]
-        )
-
+        return len(batch) * max([self.size_fn(sample) for sample in batch])
+        
     def load_chunk(self):
         self.basepos = self.nextpos
         logger.info(
@@ -246,7 +256,7 @@ class EnvDataset(Dataset):
 
         return wrapper
 
-    def _fill_queue(self, n: int, key_fn):
+    def _fill_queue(self, n: int):
         """
         Add elements to the queue (fill it entirely if `n == -1`)
         Optionally sort it (if `key_fn` is not `None`)
@@ -273,8 +283,7 @@ class EnvDataset(Dataset):
             self.collate_queue.append(sample)
 
         # sort sequences
-        if key_fn is not None:
-            self.collate_queue.sort(key=key_fn)
+        self.collate_queue.sort(key=self.size_fn)
 
     def collate_reduce_padding_uniform(self, collate_fn, key_fn, max_size=None):
         """
@@ -301,7 +310,7 @@ class EnvDataset(Dataset):
             ), "Queue size too big, current queue size ({}/{})".format(
                 len(self.collate_queue), self.collate_queue_size
             )
-            self._fill_queue(n=-1, key_fn=key_fn)
+            self._fill_queue(n=-1)
             assert (
                 len(self.collate_queue) == self.collate_queue_size
             ), "Fill has not been successful"
@@ -365,8 +374,6 @@ class EnvDataset(Dataset):
             worker_id = self.get_worker_id()
             self.env.worker_id = worker_id
             seed = [worker_id, self.params.global_rank, self.env_base_seed]
-            if self.env_info is not None:
-                seed += [self.env_info]
             self.env.rng = np.random.RandomState(seed)
             logger.info(
                 f"Initialized random generator for worker {worker_id}, with seed "
@@ -379,13 +386,11 @@ class EnvDataset(Dataset):
             seed = [
                 worker_id,
                 self.params.global_rank,
-                self.test_env_seed if "valid" in self.type else 0,
+                self.env_base_seed,
             ]
             self.env.rng = np.random.RandomState(seed)
             logger.info(
-                "Initialized {} generator, with seed {} (random state: {})".format(
-                    self.type, seed, self.env.rng
-                )
+                f"Initialized test generator, with seed {seed} (random state: {self.env.rng})"
             )
 
     def get_worker_id(self):
@@ -414,6 +419,7 @@ class EnvDataset(Dataset):
             if self.train and self.skip:
                 return SKIP_ITEM
             else:
+                
                 sample = self.generate_sample()
                 return sample
         else:
@@ -422,59 +428,12 @@ class EnvDataset(Dataset):
             else:
                 return self.read_sample(index)
 
-    def read_sample(self, index):
-        """
-        Read a sample.
-        """
-        idx = index
-        if self.train:
-            if self.batch_load:
-                if index >= self.nextpos:
-                    self.load_chunk()
-                idx = index - self.basepos
-            else:
-                index = self.env.rng.randint(len(self.data))
-                idx = index
-
-        def str_list_to_float_array(lst):
-            for i in range(len(lst)):
-                for j in range(len(lst[i])):
-                    lst[i][j] = float(lst[i][j])
-            return np.array(lst)
-
-        x = copy.deepcopy(self.data[idx])
-        x["x_to_fit"] = str_list_to_float_array(x["x_to_fit"])
-        x["y_to_fit"] = str_list_to_float_array(x["y_to_fit"])
-        x["x_to_predict"] = str_list_to_float_array(x["x_to_predict"])
-        x["y_to_predict"] = str_list_to_float_array(x["y_to_predict"])
-        x["tree"] = self.env.equation_encoder.decode(x["tree"].split(","))
-        x["tree_encoded"] = self.env.equation_encoder.encode(x["tree"])
-        infos = {}
-
-        for col in x.keys():
-            if col not in [
-                "x_to_fit",
-                "y_to_fit",
-                "x_to_predict",
-                "y_to_predict",
-                "tree",
-                "tree_encoded",
-            ]:
-                infos[col] = int(x[col])
-        x["infos"] = infos
-        for k in infos.keys():
-            del x[k]
-        return x
-
     def generate_sample(self):
-        expr, (x, y) = self.env.get_sample()
-        sample = {"expression": expr, "x": x, "y": y}
+        expr, (x, y) = self.env.get_sample(n_observations=self.params.n_observations, n_ops=self.params.max_ops, max_n_vars=self.params.max_vars)
+        sample = {"name": f"generated_{rstr(8)}", "expression": expr, "x": x, "y": y}
         return sample
 
+    def read_sample(self, index):
+        raise NotImplementedError
 
 
-def select_dico_index(dico, idx):
-    new_dico = {}
-    for k in dico.keys():
-        new_dico[k] = dico[k][idx]
-    return new_dico

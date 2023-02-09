@@ -393,53 +393,6 @@ class Trainer(object):
         # log speed + stats + learning rate
         logger.info(s_iter + s_speed + s_mem + s_stat + s_lr + s_total_eq)
 
-    def get_generation_statistics(self, task):
-
-        total_eqs = sum(
-            x.shape[0]
-            for x in self.infos_statistics[list(self.infos_statistics.keys())[0]]
-        )
-        logger.info("Generation statistics (to generate {} eqs):".format(total_eqs))
-
-        all_infos = defaultdict(list)
-        for info_type, infos in self.infos_statistics.items():
-            all_infos[info_type] = torch.cat(infos).tolist()
-            infos = [torch.bincount(info) for info in infos]
-            max_val = max([info.shape[0] for info in infos])
-            aggregated_infos = torch.cat(
-                [
-                    F.pad(info, (0, max_val - info.shape[0])).unsqueeze(-1)
-                    for info in infos
-                ],
-                -1,
-            ).sum(-1)
-            non_zeros = aggregated_infos.nonzero(as_tuple=True)[0]
-            vals = [
-                (
-                    non_zero.item(),
-                    "{:.2e}".format(
-                        (aggregated_infos[non_zero] / aggregated_infos.sum()).item()
-                    ),
-                )
-                for non_zero in non_zeros
-            ]
-            logger.info("{}: {}".format(info_type, vals))
-        all_infos = pd.DataFrame(all_infos)
-        g = sns.PairGrid(all_infos)
-        g.map_upper(sns.scatterplot)
-        g.map_lower(sns.kdeplot, fill=True)
-        g.map_diag(sns.histplot, kde=True)
-        plt.savefig(
-            os.path.join(self.params.dump_path, "statistics_{}.png".format(self.epoch))
-        )
-
-        str_errors = "Errors ({} eqs)\n ".format(total_eqs)
-        for error_type, count in self.errors_statistics.items():
-            str_errors += "{}: {}, ".format(error_type, count)
-        logger.info(str_errors[:-2])
-        self.errors_statistics = defaultdict(int)
-        self.infos_statistics = defaultdict(list)
-
     def save_checkpoint(self, name, include_optimizer=True):
         """
         Save the model / checkpoints.
@@ -459,6 +412,7 @@ class Trainer(object):
         }
 
         for k, v in self.modules.items():
+            if not k.endswith("_module"): continue
             logger.warning(f"Saving {k} parameters ...")
             data[k] = v.state_dict()
 
@@ -496,6 +450,7 @@ class Trainer(object):
 
         # reload model parameters
         for k, v in self.modules.items():
+            if not k.endswith("_module"): continue
             weights = data[k]
             try:
                 weights = data[k]
@@ -641,75 +596,21 @@ class Trainer(object):
             raise
         return batch
 
-    def export_data(self, task):
-        """
-        Export data to the disk.
-        """
-        samples, _ = self.get_batch(task)
-        for info in samples["infos"]:
-            samples["infos"][info] = list(map(str, samples["infos"][info].tolist()))
-
-        def get_dictionary_slice(idx, dico):
-            x = {}
-            for d in dico:
-                x[d] = dico[d][idx]
-            return x
-
-        def float_list_to_str_lst(lst, float_precision):
-            for i in range(len(lst)):
-                for j in range(len(lst[i])):
-                    str_float = f"%.{float_precision}e" % lst[i][j]
-                    lst[i][j] = str_float
-            return lst
-
-        processed_e = len(samples)
-        for i in range(processed_e):
-            # prefix
-            outputs = {**get_dictionary_slice(i, samples["infos"])}
-            x_to_fit = samples["x_to_fit"][i].tolist()
-            y_to_fit = samples["y_to_fit"][i].tolist()
-            x_to_predict = samples["x_to_predict"][i].tolist()
-            y_to_predict = samples["y_to_predict"][i].tolist()
-            outputs["x_to_fit"] = float_list_to_str_lst(
-                x_to_fit, self.params.float_precision
-            )
-            outputs["y_to_fit"] = float_list_to_str_lst(
-                y_to_fit, self.params.float_precision
-            )
-            outputs["x_to_predict"] = float_list_to_str_lst(
-                x_to_predict, self.params.float_precision
-            )
-            outputs["y_to_predict"] = float_list_to_str_lst(
-                y_to_predict, self.params.float_precision
-            )
-            outputs["tree"] = samples["tree"][i].prefix()
-
-            self.file_handler_prefix.write(json.dumps(outputs) + "\n")
-            self.file_handler_prefix.flush()
-
-        # number of processed sequences / words
-        self.n_equations += self.params.batch_size
-        self.total_samples += self.params.batch_size
-        self.stats["processed_e"] += len(samples)
-
     def enc_dec_step(self):
         """
         Encoding / decoding step.
         """
         params = self.params
         embedder, encoder, decoder = (
-            self.modules["embedder"],
+            self.modules["embedder_module"],
             self.modules["encoder_module"],
             self.modules["decoder_module"],
         )
-        input_tokenizer, output_tokenizer = (
-            self.modules["input_tokenizer"],
-            self.modules["output_tokenizer"],
-        )
-        #embedder.train()
+        output_tokenizer = self.modules["output_tokenizer"]
+        
+        embedder.train()
         encoder.train()
         decoder.train()
-        env = self.env
 
         samples = self.get_batch()
        
@@ -720,7 +621,6 @@ class Trainer(object):
         datasets = [np.concatenate([yi[:, None], xi], 1) for xi, yi in zip(x, y)] 
         x1, len1 = embedder(datasets)
         x2, len2 = batch_expressions(output_tokenizer, decoder.word2id, expressions)
-
 
         # target words to predict
         alen = torch.arange(len2.max(), dtype=torch.long, device=len2.device)
@@ -733,7 +633,6 @@ class Trainer(object):
         # cuda
         x2, len2, y = to_cuda(x2, len2, y)
         # forward / loss
-        print(x1.shape)
         if params.amp == -1 or params.nvidia_apex:
             encoded = encoder("fwd", x=x1, lengths=len1, causal=False)
             decoded = decoder(

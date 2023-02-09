@@ -18,7 +18,7 @@ import symbolicregression
 from symbolicregression.slurm import init_signal_handler, init_distributed_mode
 from symbolicregression.utils import bool_flag, initialize_exp
 from symbolicregression.model import check_model_params, build_modules
-from symbolicregression.envs import build_env
+from symbolicregression.envs import build_env, create_test_iterator
 from symbolicregression.trainer import Trainer
 from evaluate import Evaluator
 from parsers import get_parser
@@ -60,48 +60,25 @@ def main(params):
         logger.info("============ Starting epoch %i ... ============" % trainer.epoch)
 
         trainer.inner_epoch = 0
-        while trainer.inner_epoch < trainer.n_steps_per_epoch:
-
-            # training steps
-            for task_id in np.random.permutation(len(params.tasks)):
-                task = params.tasks[task_id]
-                if params.export_data:
-                    trainer.export_data()
-                else:
-                    trainer.enc_dec_step()
-                trainer.iter()
+        while trainer.inner_epoch < trainer.n_steps_per_epoch:  
+            trainer.enc_dec_step()
+            trainer.iter()
 
         logger.info("============ End of epoch %i ============" % trainer.epoch)
-        if params.debug_train_statistics:
-            for task in params.tasks:
-                trainer.get_generation_statistics(task)
 
         trainer.save_periodic()
 
         if params.eval_in_domain:
-            scores = evaluator.evaluate_in_domain(
-                "valid1",
-                "functions",
+            test_iterator = create_test_iterator(env, "", params)
+
+            scores = evaluator.evaluate(
+                test_iterator,
+                params,
                 logger=logger,
-                save=params.save_results,
-                ablation_to_keep=params.ablation_to_keep,
             )
             logger.info("__log__:%s" % json.dumps(scores))
 
-        if params.eval_on_pmlb:
-            feynman_scores = evaluator.evaluate_pmlb(
-                filter_fn=lambda x: x["dataset"].str.contains("feynman")
-            )
-            logger.info("__feynman__:%s" % json.dumps(feynman_scores))
-
-            filter_fn = lambda x: ~(
-                x["dataset"].str.contains("strogatz")
-                | x["dataset"].str.contains("feynman")
-            )
-            black_box_scores = evaluator.evaluate_pmlb(filter_fn=filter_fn)
-            logger.info("__black_box__:%s" % json.dumps(black_box_scores))
-
-        trainer.save_best_model(scores, prefix="functions", suffix="fit")
+        #trainer.save_best_model(scores, prefix="functions", suffix="fit")
         # end of epoch
         trainer.end_epoch(scores)
 
