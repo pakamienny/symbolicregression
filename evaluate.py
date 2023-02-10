@@ -33,7 +33,7 @@ from symbolicregression.trainer import Trainer
 from symbolicregression.model.sklearn_wrapper import SymbolicTransformerRegressor
 from symbolicregression.model.model_wrapper import ModelWrapper
 from symbolicregression.envs.new_environment import create_test_iterator
-from symbolicregression_env.envs import Node, NodeParseError
+from symbolicregression.envs import Node, NodeParseError
 from sklearn.model_selection import train_test_split
 import pandas as pd
 
@@ -90,11 +90,12 @@ class Evaluator(object):
             datasets = [np.concatenate([yi[mask, None], xi[mask]], 1) for xi, yi, mask in zip(samples["x"], samples["y"], samples["is_train"])] 
             n_datasets = len(datasets)
             names = samples["name"] ##will need to duplicate if use more than 1 sample
+
             x, x_len = embedder(datasets)
             encoded = encoder("fwd", x=x, lengths=x_len, causal=False).transpose(0, 1)
-
             generations, _ = decoder.generate(encoded, x_len, sample_temperature=None, max_len=params.max_generated_output_len) ##TODO: support beam search / sampling
             generations = generations.transpose(0, 1)
+            
             for dataset_id, name, generation in zip(np.arange(n_datasets), names, generations):
                 words = [output_id2word[tok.item()] for tok in generation]
                 assert words[0]=="<EOS>" and words[-1]=="<EOS>"  ##TODO: adapt when eval_batch_size > 1
@@ -103,10 +104,10 @@ class Evaluator(object):
                     is_train = samples["is_train"][dataset_id] 
                     xtrain, xtest, ytrain, ytest = X[is_train], X[~is_train], Y[is_train], Y[~is_train] 
                     decoded_expression: Node = output_tokenizer.decode(words[1:-1])
+
                     prefix = decoded_expression.prefix()
                     ytilde_train = decoded_expression.evaluate(xtrain)
                     ytilde_test = decoded_expression.evaluate(xtest)
-
                     r2_train = stable_r2_score(ytrain, ytilde_train)
                     r2_test = stable_r2_score(ytest, ytilde_test)
                     r2_test = np.nan
@@ -118,7 +119,7 @@ class Evaluator(object):
                     r2_test = np.nan
                     failed = True
 
-                result = {"dataset": name, "ground_truth": samples["expression"][dataset_id], "expression": prefix , "r2_train": r2_train, "r2_test": r2_test, "failed": failed, "time": time.time()-start_time}
+                result = {"dataset": name, "expression": prefix , "r2_train": r2_train, "r2_test": r2_test, "failed": failed, "time": time.time()-start_time}
                 if "expression" in samples:
                     result["ground_truth"] = samples["expression"][dataset_id]
                 results.append(result)
@@ -201,7 +202,7 @@ if __name__ == "__main__":
     params.multi_gpu = False
     params.is_slurm_job = False
     params.eval_on_pmlb = True  # True
-    params.eval_in_domain = True
+    params.eval_in_domain = False
     params.local_rank = -1
     params.master_port = -1
     params.num_workers = 1

@@ -5,7 +5,8 @@
 # LICENSE file in the root directory of this source tree.
 
 from logging import getLogger
-from symbolicregression_env.envs import ExpressionGenerator, ExpressionGeneratorArgs
+from symbolicregression.envs.generator import ExpressionGenerator, ExpressionGeneratorArgs
+from symbolicregression.envs.graph import Node, NodeParseError
 from symbolicregression.envs.new_environment import create_test_iterator, create_train_iterator
 
 logger = getLogger()

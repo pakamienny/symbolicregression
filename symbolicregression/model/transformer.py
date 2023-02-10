@@ -354,7 +354,7 @@ class TransformerModel(nn.Module):
         # check inputs
         slen, bs = x.size()[:2]
         assert lengths.size(0) == bs
-        assert lengths.max().item() <= slen
+        assert lengths.max().item() <= slen, f"{lengths.max().item()} <= {slen}"
         x = x.transpose(0, 1)  # batch size as dimension 0
         assert (src_enc is None) == (src_len is None)
         if src_enc is not None:

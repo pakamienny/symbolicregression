@@ -22,9 +22,8 @@ from pathlib import Path
 # import math
 from sklearn.model_selection import train_test_split
 
-from symbolicregression.envs.utils import zip_dic, ZMQNotReady, ZMQNotReadySample
-import symbolicregression_env
-from symbolicregression_env.envs import ExpressionGenerator, ExpressionGeneratorArgs, Node
+from symbolicregression.envs.function_utils import zip_dic, ZMQNotReady, ZMQNotReadySample
+from symbolicregression.envs import ExpressionGenerator, ExpressionGeneratorArgs, Node
 import numpy as np
 from typing import Optional, Dict
 import torch
@@ -415,6 +414,7 @@ class EnvDataset(Dataset):
         return self.size
 
     def init_folder(self, folder):
+        print(f"Reading {folder}")
         self.files = list(Path(folder).glob("*/*.tsv.gz"))
         
 
@@ -464,10 +464,12 @@ class EnvDataset(Dataset):
         file = self.files[index]
         name = file.name.split(".")[0]
         x, y, _ = read_csv_file(str(file), nrows=10_000)
+        assert x.shape[1]<=10, f"Found more than 10 dim in {name}"
+
         train_or_valid_idxs, test_idxs = train_test_split(np.arange(len(x)), train_size=0.75, test_size=0.25, random_state=self.env.rng)
         is_train_or_valid = np.full(len(x), True)
         is_train_or_valid[test_idxs] = False
-        train_idxs = np.random.choice(train_or_valid_idxs, replace=False)
+        train_idxs = np.random.choice(train_or_valid_idxs, size=min(self.params.n_observations, len(train_or_valid_idxs)), replace=False)
         is_train = np.full(len(x), False)
         is_train[train_idxs]=True
         sample = {

@@ -8,13 +8,13 @@
 from logging import getLogger
 import os
 import torch
-from .embedders import FlatEmbedder
-from .transformer import TransformerModel
-from .sklearn_wrapper import SymbolicTransformerRegressor
-from .model_wrapper import ModelWrapper
+
+from symbolicregression.model.embedders import FlatEmbedder
+from symbolicregression.model.transformer import TransformerModel
+from symbolicregression.tokenizers import FloatTokenizer
+from symbolicregression.tokenizers import ExpressionTokenizer
 
 logger = getLogger()
-import symbolicregression_env
 
 def check_model_params(params):
     """
@@ -36,8 +36,8 @@ def build_modules(env, params):
     """
     modules = {}
 
-    float_tokenizer = symbolicregression_env.FloatTokenizer()
-    expression_tokenizer = symbolicregression_env.ExpressionTokenizer(precision=1)
+    float_tokenizer = FloatTokenizer()
+    expression_tokenizer = ExpressionTokenizer(precision=1)
 
     modules["input_tokenizer"]=float_tokenizer
     modules["output_tokenizer"]=expression_tokenizer

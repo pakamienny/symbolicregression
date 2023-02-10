@@ -1,65 +1,33 @@
-# Copyright (c) Meta Platforms, Inc. and affiliates.
-# All rights reserved.
-#
-# This source code is licensed under the license found in the
-# LICENSE file in the root directory of this source tree.
 
-def zip_dic(lst):
-    dico = {}
-    for d in lst:
-        for k in d:
-            if k not in dico:
-                dico[k] = []
-            dico[k].append(d[k])
-    for k in dico:
-        if isinstance(dico[k][0], dict):
-            dico[k] = zip_dic(dico[k])
-    return dico
+import torch
 
 
-def unsqueeze_dic(dico):
-    dico_copy = {}
-    for d in dico:
-        if isinstance(dico[d], dict):
-            dico_copy[d] = unsqueeze_dic(dico[d])
-        else:
-            dico_copy[d] = [dico[d]]
-    return dico_copy
+torch_cos = lambda x: torch.cos(x)
+torch_sin = lambda x: torch.sin(x)
+torch_tan = lambda x: torch.tan(x)
+torch_inv = lambda x: torch.inv(x)
+torch_square = lambda x: x**2
+
+torch_sub = lambda x, y: x-y
+torch_add = lambda x, y: x+y
+torch_mul = lambda x, y: x*y
+torch_div = lambda x, y: x/y
 
 
-def squeeze_dic(dico):
-    dico_copy = {}
-    for d in dico:
-        if isinstance(dico[d], dict):
-            dico_copy[d] = squeeze_dic(dico[d])
-        else:
-            dico_copy[d] = dico[d][0]
-    return dico_copy
 
+SUPPORTED_UNARY_OPS = { 
+    "cos": {"infix": lambda x: f"cos({x})", "torch": "torch_cos"},
+    "sin": {"infix": lambda x: f"sin({x})", "torch": "torch_sin"},
+    "tan": {"infix": lambda x: f"tan({x})", "torch": "torch_tan"},
+    "inv": {"infix": lambda x: f"({x} ** -1)", "torch": "torch_inv"},
+    "square": {"infix": lambda x: f"({x} ** 2)",  "torch": "torch_square"},
+}
 
-def chunks(lst, n):
-    """Yield successive n-sized chunks from lst."""
-    for i in range(0, len(lst), n):
-        yield lst[i : i + n]
+SUPPORTED_BINARY_OPS = {
+    "-": {"infix": lambda x,y: f"({x}-{y})", "torch": "torch_sub"}, 
+    "+": {"infix": lambda x,y: f"({x}+{y})", "torch": "torch_add"},
+    "*": {"infix": lambda x,y: f"({x}*{y})", "torch": "torch_mul"},
+    "/": {"infix": lambda x,y: f"({x}/{y})", "torch": "torch_div"},
+}
 
-
-def getSizeOfNestedList(listOfElem):
-    """Get number of elements in a nested list"""
-    count = 0
-    # Iterate over the list
-    for elem in listOfElem:
-        # Check if type of element is list
-        if type(elem) == list:
-            # Again call this function to get the size of this element
-            count += getSizeOfNestedList(elem)
-        else:
-            count += 1
-    return count
-
-
-class ZMQNotReady(Exception):
-    pass
-
-
-class ZMQNotReadySample:
-    pass
+SUPPORTED_OPS = {**SUPPORTED_BINARY_OPS, **SUPPORTED_UNARY_OPS}
