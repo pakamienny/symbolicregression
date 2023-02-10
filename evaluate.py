@@ -42,32 +42,6 @@ import time
 
 np.seterr(all="raise")
 
-
-def read_file(filename, label="target", sep=None):
-
-    if filename.endswith("gz"):
-        compression = "gzip"
-    else:
-        compression = None
-
-    if sep:
-        input_data = pd.read_csv(filename, sep=sep, compression=compression)
-    else:
-        input_data = pd.read_csv(
-            filename, sep=sep, compression=compression, engine="python"
-        )
-
-    feature_names = [x for x in input_data.columns.values if x != label]
-    feature_names = np.array(feature_names)
-
-    X = input_data.drop(label, axis=1).values.astype(float)
-    y = input_data[label].values
-
-    assert X.shape[1] == feature_names.shape[0]
-
-    return X, y, feature_names
-
-
 class Evaluator(object):
 
     ENV = None
@@ -82,7 +56,7 @@ class Evaluator(object):
         self.env = trainer.env
         Evaluator.ENV = trainer.env
 
-    def evaluate(self, iterator, params, logger=None):
+    def evaluate(self, iterator, params, save_name: str, logger=None):
 
         """
         Encoding / decoding step with beam generation and SymPy check.
@@ -109,34 +83,45 @@ class Evaluator(object):
         output_symbols += env.get_symbols() + output_tokenizer.get_symbols()
         output_id2word = {i: s for i, s in enumerate(output_symbols)}
 
-        iterator = create_test_iterator(env, self.trainer.data_path, self.params)
         results = []
 
         for samples in iterator:
-            datasets = [np.concatenate([yi[:, None], xi], 1) for xi, yi in zip(samples["x"], samples["y"])] 
+            start_time = time.time()
+            datasets = [np.concatenate([yi[mask, None], xi[mask]], 1) for xi, yi, mask in zip(samples["x"], samples["y"], samples["is_train"])] 
             n_datasets = len(datasets)
             names = samples["name"] ##will need to duplicate if use more than 1 sample
             x, x_len = embedder(datasets)
             encoded = encoder("fwd", x=x, lengths=x_len, causal=False).transpose(0, 1)
 
-            generations, _ = decoder.generate(encoded, x_len, sample_temperature=None, max_len=params.max_generated_output_len)
+            generations, _ = decoder.generate(encoded, x_len, sample_temperature=None, max_len=params.max_generated_output_len) ##TODO: support beam search / sampling
             generations = generations.transpose(0, 1)
             for dataset_id, name, generation in zip(np.arange(n_datasets), names, generations):
                 words = [output_id2word[tok.item()] for tok in generation]
-                assert words[0]=="<EOS>" and words[-1]=="<EOS>" 
+                assert words[0]=="<EOS>" and words[-1]=="<EOS>"  ##TODO: adapt when eval_batch_size > 1
                 try:
+                    X, Y = samples["x"][dataset_id], samples["y"][dataset_id]
+                    is_train = samples["is_train"][dataset_id] 
+                    xtrain, xtest, ytrain, ytest = X[is_train], X[~is_train], Y[is_train], Y[~is_train] 
                     decoded_expression: Node = output_tokenizer.decode(words[1:-1])
                     prefix = decoded_expression.prefix()
-                    ytilde = decoded_expression.evaluate(samples["x"][dataset_id])
-                    r2_train = stable_r2_score(samples["y"][dataset_id], ytilde)
+                    ytilde_train = decoded_expression.evaluate(xtrain)
+                    ytilde_test = decoded_expression.evaluate(xtest)
+
+                    r2_train = stable_r2_score(ytrain, ytilde_train)
+                    r2_test = stable_r2_score(ytest, ytilde_test)
                     r2_test = np.nan
                     failed = False
+
                 except NodeParseError:
                     prefix = ""
                     r2_train = np.nan
                     r2_test = np.nan
                     failed = True
-                results.append({"dataset": name, "expression": prefix , "r2_train": r2_train, "r2_test": r2_test, "failed": failed})
+
+                result = {"dataset": name, "ground_truth": samples["expression"][dataset_id], "expression": prefix , "r2_train": r2_train, "r2_test": r2_test, "failed": failed, "time": time.time()-start_time}
+                if "expression" in samples:
+                    result["ground_truth"] = samples["expression"][dataset_id]
+                results.append(result)
 
         results_df = pd.DataFrame(results)
         scores["r2_train_mean"]=results_df["r2_train"].mean()
@@ -144,7 +129,12 @@ class Evaluator(object):
         scores["r2_test_mean"]=results_df["r2_test"].mean()
         scores["r2_test_median"]=results_df["r2_test"].median()
         scores["decoded_failed"]=results_df["failed"].mean()
-
+        if self.trainer.epoch % params.save_results_every == 0:
+            eval_dir = Path(self.params.job_dir) / f"eval_{save_name}"
+            os.makedirs(eval_dir, exist_ok=True)
+            file_to_save = eval_dir / f"epoch_{self.trainer.epoch}.csv"
+            results_df.to_csv(file_to_save, sep=";")
+            print(f"Saved results under {file_to_save}")
         return scores
 
 def main(params):
@@ -172,58 +162,37 @@ def main(params):
     trainer = Trainer(modules, env, params)
     evaluator = Evaluator(trainer)
     scores = {}
-    save = params.save_results
 
     if params.eval_in_domain:
-        evaluator.set_env_copies(["valid1"])
-        scores = evaluator.evaluate_in_domain(
-            "valid1",
-            "functions",
-            save=save,
-            logger=logger,
-            ablation_to_keep=params.ablation_to_keep,
-        )
+        test_iterator = create_test_iterator(env=env, data_path="", folder="", params=params)
+        scores = evaluator.evaluate(
+                test_iterator,
+                params,
+                save_name="in-domain",
+                logger=logger,
+            )
         logger.info("__log__:%s" % json.dumps(scores))
 
     if params.eval_on_pmlb:
-        target_noise = params.target_noise
-        random_state = params.random_state
-        data_type = params.pmlb_data_type
+        srbench_iterator = create_test_iterator(env=env, data_path="", folder=params.srbench_path, params=params)
 
-        if data_type == "feynman":
-            filter_fn = lambda x: x["dataset"].str.contains("feynman")
-        elif data_type == "strogatz":
-            print("Strogatz data")
-            filter_fn = lambda x: x["dataset"].str.contains("strogatz")
-        elif data_type == "603_fri_c0_250_50":
-            filter_fn = lambda x: x["dataset"].str.contains("603_fri_c0_250_50")
-        else:
-            filter_fn = lambda x: ~(
-                x["dataset"].str.contains("strogatz")
-                | x["dataset"].str.contains("feynman")
-            )
-
-        pmlb_scores = evaluator.evaluate_pmlb(
-            target_noise=target_noise,
-            verbose=params.eval_verbose_print,
-            random_state=random_state,
-            save=save,
-            filter_fn=filter_fn,
+        srbench_scores = evaluator.evaluate(
+            srbench_iterator,
+            params,
+            save_name="pmlb",
             logger=logger,
-            save_file=None,
-            save_suffix="eval_pmlb.csv",
         )
-        logger.info("__pmlb__:%s" % json.dumps(pmlb_scores))
+        logger.info("__pmlb__:%s" % json.dumps(srbench_scores))
 
 
 if __name__ == "__main__":
 
     parser = get_parser()
     params = parser.parse_args()
+    params.reload_checkpoint = "/checkpoint/pakamienny/new_symbolicregression/paper/tokens_per_batch_10000_lr_0.0002_emb_emb_dim_512/2023-02-10_03-03-57/periodic-0.pth"
     # params.reload_checkpoint = "/checkpoint/sdascoli/symbolicregression/shift_all/use_skeleton_True_use_sympy_False_tokens_per_batch_10000_n_enc_layers_4_n_dec_layers_16"
-    params.reload_checkpoint = "/checkpoint/sdascoli/symbolicregression/shift_all/use_skeleton_False_use_sympy_False_tokens_per_batch_10000_n_enc_layers_4_n_dec_layers_16/"
     # params.reload_checkpoint = "/checkpoint/sdascoli/symbolicregression/newgen/use_skeleton_False_use_sympy_False_tokens_per_batch_10000_n_enc_layers_4_n_dec_layers_16/"
-    pk = pickle.load(open(params.reload_checkpoint + "/params.pkl", "rb"))
+    pk = pickle.load(open(Path(params.reload_checkpoint).parent / "params.pkl", "rb"))
     pickled_args = pk.__dict__
     for p in params.__dict__:
         if p in pickled_args and p not in ["dump_path", "reload_checkpoint"]:
@@ -232,7 +201,7 @@ if __name__ == "__main__":
     params.multi_gpu = False
     params.is_slurm_job = False
     params.eval_on_pmlb = True  # True
-    params.eval_in_domain = False
+    params.eval_in_domain = True
     params.local_rank = -1
     params.master_port = -1
     params.num_workers = 1
@@ -247,4 +216,6 @@ if __name__ == "__main__":
     params.max_input_points = 200
     params.pmlb_data_type = "black_box"
     params.n_trees_to_refine = 10
+    params.job_dir = params.dump_path
+    print(f"Launching eval in {params.job_dir}")
     main(params)

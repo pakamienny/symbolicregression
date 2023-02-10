@@ -17,7 +17,7 @@ import time
 import shutil
 import itertools
 from distutils import dir_util
-
+import datetime
 import train as classification
 import submitit
 
@@ -26,13 +26,13 @@ FOLDER_NAME = "paper"
 def parse_args():
     classification_parser = classification.get_parser()
     parser = argparse.ArgumentParser(
-        "Submitit for recur", parents=[classification_parser]
+        "Submitit for SR", parents=[classification_parser]
     )
     parser.add_argument(
         "--ngpus", default=8, type=int, help="Number of gpus to request on each node"
     )
     parser.add_argument(
-        "--nodes", default=2, type=int, help="Number of nodes to request"
+        "--nodes", default=1, type=int, help="Number of nodes to request"
     )
     parser.add_argument("--timeout", default=4000, type=int, help="Duration of the job")
     parser.add_argument(
@@ -60,7 +60,7 @@ def parse_args():
 def get_shared_folder() -> Path:
     user = os.getenv("USER")
     if Path("/checkpoint/").is_dir():
-        p = Path("/checkpoint/{}/symbolicregression".format(user))
+        p = Path("/checkpoint/{}/new_symbolicregression".format(user))
         # p = p / str(int(time.time()))
         p = p / FOLDER_NAME
         p.mkdir(exist_ok=True)
@@ -109,10 +109,9 @@ def main():
     shared_folder = get_shared_folder()
 
     grid = {
-        'use_skeleton':[False],
-        "tokens_per_batch":[10000, 20000],
-        'lr': [0.0002, 0.0004],
-        'emb_emb_dim':[64,128],
+        "tokens_per_batch":[10000],
+        'lr': [0.0002],
+        'emb_emb_dim':[512],
     }
 
     def dict_product(d):
@@ -123,18 +122,19 @@ def main():
     for params in dict_product(grid):
 
         args.master_port = np.random.randint(10001, 20000)
-        args.float_constants = True
-        args.prediction_sigmas="1,2,4,8,16,32"
         args.max_input_dimension = 10
         args.n_steps_per_epoch = 3000
         args.use_volta32 = True
-        args.eval_size = 2000
-        args.batch_size_eval = 64
-        args.lr = 0.0002
 
         name = "_".join(["{}_{}".format(k, v) for k, v in params.items()])
-        args.job_dir = shared_folder / name
+        job_dir = shared_folder / name 
+        Path(job_dir).mkdir(exist_ok=True)
+        now = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+
+        args.job_dir = job_dir / now
         Path(args.job_dir).mkdir(exist_ok=True)
+
+   
 
         for f in os.listdir():
             if f.endswith(".py"):
@@ -145,6 +145,8 @@ def main():
         args.exp_id = args.job_dir.name
         args.exp_name = args.job_dir.parent.name
         args.dump_path = args.job_dir.parent.parent
+
+        print(f"Job dir is {args.job_dir}")
 
         # Note that the folder will depend on the job_id, to easily track experiments
         executor = submitit.AutoExecutor(folder=args.job_dir, slurm_max_num_timeout=30)

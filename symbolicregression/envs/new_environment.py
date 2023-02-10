@@ -12,13 +12,16 @@ import io
 import sys
 import copy
 import json
+import pandas as pd
 import operator
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Tuple
 from collections import deque, defaultdict
 import time
 import traceback
-
+from pathlib import Path
 # import math
+from sklearn.model_selection import train_test_split
+
 from symbolicregression.envs.utils import zip_dic, ZMQNotReady, ZMQNotReadySample
 import symbolicregression_env
 from symbolicregression_env.envs import ExpressionGenerator, ExpressionGeneratorArgs, Node
@@ -97,7 +100,7 @@ def create_train_iterator(env, data_path, params, **args):
         collate_fn=collate_fn,
     )
 
-def create_test_iterator(env, data_path, params, **args):
+def create_test_iterator(env, data_path, folder, params, **args):
     """
     Create a dataset for this environment.
     """
@@ -110,6 +113,7 @@ def create_test_iterator(env, data_path, params, **args):
         size_fn=None,
         params=params,
         path=data_path,
+        folder=folder,
         size=params.eval_size,
         skip=False,
         **args,
@@ -134,6 +138,7 @@ class EnvDataset(Dataset):
         size_fn,
         train: bool = True,
         path: str = "",
+        folder: str = "",
         skip=False,
         size=None,
         type=None,
@@ -147,6 +152,7 @@ class EnvDataset(Dataset):
         self.batch_size = params.batch_size
         self.env_base_seed = params.env_base_seed
         self.path = path
+        self.folder = folder
         self.count = 0
         self.remaining_data = 0
         self.type = type
@@ -171,7 +177,6 @@ class EnvDataset(Dataset):
         self.tokens_per_batch = params.tokens_per_batch
 
         # generation, or reloading from file
-        print(path)
         if path != "":
             assert os.path.isfile(path), "{} not found".format(path)
             if params.batch_load:
@@ -409,31 +414,86 @@ class EnvDataset(Dataset):
         """
         return self.size
 
+    def init_folder(self, folder):
+        self.files = list(Path(folder).glob("*/*.tsv.gz"))
+        
+
     def __getitem__(self, index):
         """
         Return a training sample.
         Either generate it, or read it from file.
         """
         self.init_rng()
-        if self.path == "":
-            if self.train and self.skip:
-                return SKIP_ITEM
-            else:
-                
-                sample = self.generate_sample()
-                return sample
-        else:
+        if self.path != "":
             if self.train and self.skip:
                 return SKIP_ITEM
             else:
                 return self.read_sample(index)
+        if self.folder != "":
+            self.init_folder(self.folder)
+            sample = self.read_file(index)
+            return sample
+
+        else:
+            if self.train and self.skip:
+                return SKIP_ITEM
+            else: 
+                sample = self.generate_sample()
+                return sample
+
 
     def generate_sample(self):
-        expr, (x, y) = self.env.get_sample(n_observations=self.params.n_observations, n_ops=self.params.max_ops, max_n_vars=self.params.max_vars)
-        sample = {"name": f"generated_{rstr(8)}", "expression": expr, "x": x, "y": y}
+        expr, (x, y) = self.env.get_sample(n_observations=self.params.n_observations+100, n_ops=self.params.max_ops, max_n_vars=self.params.max_vars)
+        is_train = np.full(self.params.n_observations+100, True)
+        is_train[self.params.n_observations:]=False
+        sample = {
+            "name": f"generated_{rstr(8)}", 
+            "expression": expr, 
+            "x": x, 
+            "y": y, 
+            "is_train": is_train,
+            "is_train_or_valid": is_train
+            }
         return sample
 
     def read_sample(self, index):
         raise NotImplementedError
 
 
+    def read_file(self, index):
+        file = self.files[index]
+        name = file.name.split(".")[0]
+        x, y, _ = read_csv_file(str(file), nrows=10_000)
+        train_or_valid_idxs, test_idxs = train_test_split(np.arange(len(x)), train_size=0.75, test_size=0.25, random_state=self.env.rng)
+        is_train_or_valid = np.full(len(x), True)
+        is_train_or_valid[test_idxs] = False
+        train_idxs = np.random.choice(train_or_valid_idxs, replace=False)
+        is_train = np.full(len(x), False)
+        is_train[train_idxs]=True
+        sample = {
+            "name": name, 
+            "x": x, 
+            "y": y, 
+            "is_train": is_train, 
+            "is_train_or_valid": is_train_or_valid
+            }
+        return sample
+
+
+
+def read_csv_file(
+    filename: str, label: str = "target", nrows: int = 9999, sep: str = None
+) -> Tuple[np.ndarray, np.ndarray, List[str]]:
+    if filename.endswith("gz"):
+        compression = "gzip"
+    else:
+        compression = None
+    input_data = pd.read_csv(
+        filename, sep=sep, compression=compression, nrows=nrows, engine="python"
+    )
+    feature_names = [x for x in input_data.columns.values if x != label]
+    feature_names = np.array(feature_names)
+    X = input_data.drop(label, axis=1).values.astype(float)
+    y = input_data[label].values
+    assert X.shape[1] == feature_names.shape[0]
+    return X, y, feature_names

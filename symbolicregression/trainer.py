@@ -125,12 +125,15 @@ class Trainer(object):
         if params.multi_gpu:  # and params.amp == -1:
             logger.info("Using nn.parallel.DistributedDataParallel ...")
             for k in self.modules.keys():
+                if not k.endswith("_module"):
+                    continue
+
                 self.modules[k] = nn.parallel.DistributedDataParallel(
-                    self.modules[k],
-                    device_ids=[params.local_rank],
-                    output_device=params.local_rank,
-                    broadcast_buffers=True,
-                )
+                        self.modules[k],
+                        device_ids=[params.local_rank],
+                        output_device=params.local_rank,
+                        broadcast_buffers=True,
+                    )
 
         # set optimizer
         self.set_optimizer()
@@ -177,7 +180,8 @@ class Trainer(object):
         self.n_iter = 0
         self.n_total_iter = 0
         self.stats = OrderedDict(
-            [("processed_e", 0)]
+            [("Loss", [])]
+            + [("processed_e", 0)]
             + [("processed_w", 0)]
         )
         self.last_time = time.time()
@@ -430,10 +434,10 @@ class Trainer(object):
         """
         if path is None:
             path = "checkpoint.pth"
-
+    
         if self.params.reload_checkpoint != "":
-            checkpoint_path = os.path.join(self.params.reload_checkpoint, path)
-            assert os.path.isfile(checkpoint_path)
+            checkpoint_path = self.params.reload_checkpoint
+            assert os.path.isfile(checkpoint_path), f"{checkpoint_path} does not exist"
         else:
             if root is not None:
                 checkpoint_path = os.path.join(root, path)
@@ -606,6 +610,7 @@ class Trainer(object):
             self.modules["encoder_module"],
             self.modules["decoder_module"],
         )
+        output_word2id = self.modules["output_word2id"]
         output_tokenizer = self.modules["output_tokenizer"]
         
         embedder.train()
@@ -620,7 +625,7 @@ class Trainer(object):
 
         datasets = [np.concatenate([yi[:, None], xi], 1) for xi, yi in zip(x, y)] 
         x1, len1 = embedder(datasets)
-        x2, len2 = batch_expressions(output_tokenizer, decoder.word2id, expressions)
+        x2, len2 = batch_expressions(output_tokenizer, output_word2id, expressions)
 
         # target words to predict
         alen = torch.arange(len2.max(), dtype=torch.long, device=len2.device)
@@ -666,6 +671,8 @@ class Trainer(object):
                 )
 
         # optimize
+        self.stats["Loss"].append(loss.item())
+
         self.optimize(loss)
 
         # number of processed sequences / words

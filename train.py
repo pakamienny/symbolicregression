@@ -43,10 +43,6 @@ def main(params):
     # build environment / modules / trainer / evaluator
     if params.batch_size_eval is None:
         params.batch_size_eval = int(1.5 * params.batch_size)
-    if params.eval_dump_path is None:
-        params.eval_dump_path = Path(params.dump_path) / "evals_all"
-        if not os.path.isdir(params.eval_dump_path):
-            os.makedirs(params.eval_dump_path)
 
     env = build_env(params)
 
@@ -67,16 +63,29 @@ def main(params):
         logger.info("============ End of epoch %i ============" % trainer.epoch)
 
         trainer.save_periodic()
-
         if params.eval_in_domain:
-            test_iterator = create_test_iterator(env, "", params)
+            test_iterator = create_test_iterator(env=env, data_path="", folder="", params=params)
 
             scores = evaluator.evaluate(
                 test_iterator,
                 params,
+                save_name="in-domain",
                 logger=logger,
             )
             logger.info("__log__:%s" % json.dumps(scores))
+
+        if params.eval_on_pmlb:
+            srbench_iterator = create_test_iterator(env=env, data_path="", folder=params.srbench_path, params=params)
+
+            srbench_scores = evaluator.evaluate(
+                srbench_iterator,
+                params,
+                save_name="pmlb",
+                logger=logger,
+            )
+            logger.info("__pmlb__:%s" % json.dumps(srbench_scores))
+
+
 
         #trainer.save_best_model(scores, prefix="functions", suffix="fit")
         # end of epoch
@@ -120,6 +129,8 @@ if __name__ == "__main__":
         params.is_slurm_job = False
         params.local_rank = -1
         params.master_port = -1
+    params.job_dir = params.dump_path
+
     # params.num_workers = 1
 
     # debug mode

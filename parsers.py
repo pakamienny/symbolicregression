@@ -458,7 +458,18 @@ def get_parser():
         default=5,
         help="max number of variables",
     )
-
+    parser.add_argument(
+        "--save_results_every",
+        type=int,
+        default=1,
+        help="max number of variables",
+    )
+    parser.add_argument(
+        "--srbench_path",
+        type=str,
+        default="/private/home/pakamienny/Research_2/pmlb/filtered_datasets/",
+        help="path to srbench datasets",
+    )
     return parser
 
 default_params = get_parser().parse_args(args=[])
