@@ -91,11 +91,12 @@ class Evaluator(object):
             n_datasets = len(datasets)
             names = samples["name"] ##will need to duplicate if use more than 1 sample
 
-            x, x_len = embedder(datasets)
-            encoded = encoder("fwd", x=x, lengths=x_len, causal=False).transpose(0, 1)
-            generations, _ = decoder.generate(encoded, x_len, sample_temperature=None, max_len=params.max_generated_output_len) ##TODO: support beam search / sampling
-            generations = generations.transpose(0, 1)
-            
+            with torch.no_grad():
+                x, x_len = embedder(datasets)
+                encoded = encoder("fwd", x=x, lengths=x_len, causal=False).transpose(0, 1)
+                generations, _ = decoder.generate(encoded, x_len, sample_temperature=None, max_len=params.max_generated_output_len) ##TODO: support beam search / sampling
+                generations = generations.transpose(0, 1)
+
             for dataset_id, name, generation in zip(np.arange(n_datasets), names, generations):
                 words = [output_id2word[tok.item()] for tok in generation]
                 assert words[0]=="<EOS>" and words[-1]=="<EOS>"  ##TODO: adapt when eval_batch_size > 1
@@ -201,8 +202,12 @@ if __name__ == "__main__":
 
     params.multi_gpu = False
     params.is_slurm_job = False
-    params.eval_on_pmlb = True  # True
-    params.eval_in_domain = False
+    params.eval_on_pmlb = False  # True
+    params.eval_in_domain = True
+    params.n_observations = 100
+
+    params.batch_size_eval = 2
+
     params.local_rank = -1
     params.master_port = -1
     params.num_workers = 1

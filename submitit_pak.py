@@ -111,7 +111,7 @@ def main():
     grid = {
         "tokens_per_batch":[10000],
         'lr': [0.0002],
-        'emb_emb_dim':[512],
+        'accumulate_gradients':[1, 5],
     }
 
     def dict_product(d):

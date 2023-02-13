@@ -64,8 +64,7 @@ def create_train_iterator(env, data_path, params, **args):
     logger.info(f"Creating train iterator")
 
     def size_fn(sample):
-        return sample["x"].shape[0] * (sample["x"].shape[1]+1)*3 
-    
+        return (sample["is_train"].sum()) * (sample["x"].shape[1]+1)*3 
 
    # size_fn = lambda batch: batch
     dataset = EnvDataset(
@@ -118,7 +117,7 @@ def create_test_iterator(env, data_path, folder, params, **args):
         **args,
     )
     collate_fn = dataset.collate_fn   
-
+    print(params.batch_size_eval)
     return DataLoader(
         dataset,
         timeout=0,

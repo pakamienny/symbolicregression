@@ -1,7 +1,6 @@
 from typing import Optional, Tuple, List, Set, Dict
 from dataclasses import dataclass, field
 from functools import cached_property
-from params import Params
 import numpy as np
 
 from symbolicregression.envs.graph import *
@@ -11,7 +10,7 @@ from symbolicregression.envs.rejector import check_constraints
 
 
 @dataclass
-class ExpressionGeneratorArgs(Params):
+class ExpressionGeneratorArgs():
     n_vars: int = field(default=5, metadata={"help": "Number of variables"})
     unary_ops_str: str = field(
         default="sin,square", metadata={"help": "Unary operators. Empty string for all."}

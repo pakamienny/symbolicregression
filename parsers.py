@@ -387,7 +387,7 @@ def get_parser():
         default=-1,
         help="Compute accuracy for all input lengths modulo X. -1 is equivalent to no ablation",
     )
-    parser.add_argument("--eval_on_pmlb", type=bool, default=True)
+    parser.add_argument("--eval_on_pmlb", type=bool, default=False)
     parser.add_argument("--eval_in_domain", type=bool, default=True)
 
     # debug
@@ -443,7 +443,7 @@ def get_parser():
     parser.add_argument(
         "--n_observations",
         type=int,
-        default=200,
+        default=100,
         help="max number of observations",
     )
     parser.add_argument(

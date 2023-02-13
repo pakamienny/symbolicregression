@@ -1,7 +1,6 @@
 from typing import Optional, Tuple, List, Set, Dict
 from dataclasses import dataclass, field
 from functools import cached_property
-from params import Params
 import numpy as np
 
 from symbolicregression.envs.graph import *
