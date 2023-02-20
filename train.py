@@ -73,6 +73,7 @@ def main(params):
                 logger=logger,
             )
             logger.info("__log__:%s" % json.dumps(scores))
+            trainer.save_best_model(scores, name="synthetic")
 
         if params.eval_on_pmlb:
             srbench_iterator = create_test_iterator(env=env, data_path="", folder=params.srbench_path, params=params)
@@ -84,10 +85,10 @@ def main(params):
                 logger=logger,
             )
             logger.info("__pmlb__:%s" % json.dumps(srbench_scores))
+            trainer.save_best_model(scores, name="pmlb")
 
 
 
-        #trainer.save_best_model(scores, prefix="functions", suffix="fit")
         # end of epoch
         trainer.end_epoch(scores)
 

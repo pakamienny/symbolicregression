@@ -83,6 +83,10 @@ class FloatTokenizer(Tokenizer):
             raise FloatTokenError(f"Unexpected first token: {tokens[0]}")
         if tokens[-1][0] != "E":
             raise FloatTokenError(f"Unexpected last token: {tokens[-1]}")
+        if len(tokens[1:-1]) != self.mantissa_len:
+            raise FloatTokenError(f"Wrong number of mantissa tokens: {tokens}")
+        if any([not tok.startswith("N") for tok in tokens[1:-1]]):
+            raise FloatTokenError(f"Mantissa token is bad: {tokens}")
 
         sign = 1 if tokens[0] == "S+" else -1
         mant_str = ""

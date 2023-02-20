@@ -5,6 +5,7 @@
 # LICENSE file in the root directory of this source tree.
 
 import copy
+from decimal import Underflow
 import json
 
 from pathlib import Path
@@ -32,7 +33,7 @@ from symbolicregression.metrics import *
 from symbolicregression.trainer import Trainer
 from symbolicregression.model.sklearn_wrapper import SymbolicTransformerRegressor
 from symbolicregression.model.model_wrapper import ModelWrapper
-from symbolicregression.envs.new_environment import create_test_iterator
+from symbolicregression.envs.environment import create_test_iterator
 from symbolicregression.envs import Node, NodeParseError
 from sklearn.model_selection import train_test_split
 import pandas as pd
@@ -70,36 +71,37 @@ class Evaluator(object):
                 self.modules["encoder_module"],
                 self.modules["decoder_module"],
             )
+        output_id2word = self.modules["output_id2word"]
         output_tokenizer = self.modules["output_tokenizer"]
+
         if params.multi_gpu:
             embedder, encoder, decoder = embedder.module, encoder.module, decoder.module
-
+       
         embedder.eval()
         encoder.eval()
         decoder.eval()
 
-        env = self.env
-        output_symbols = ["<EOS>", "<PAD>"]
-        output_symbols += env.get_symbols() + output_tokenizer.get_symbols()
-        output_id2word = {i: s for i, s in enumerate(output_symbols)}
-
         results = []
 
         for samples in iterator:
+            if samples is None:
+                break
             start_time = time.time()
-            datasets = [np.concatenate([yi[mask, None], xi[mask]], 1) for xi, yi, mask in zip(samples["x"], samples["y"], samples["is_train"])] 
-            n_datasets = len(datasets)
+            xys = [(xi[mask], yi[mask]) for xi, yi, mask in zip(samples["x"], samples["y"], samples["is_train"])] 
+            n_datasets = len(xys)
             names = samples["name"] ##will need to duplicate if use more than 1 sample
 
             with torch.no_grad():
-                x, x_len = embedder(datasets)
+                
+                x, x_len = embedder(xys)
                 encoded = encoder("fwd", x=x, lengths=x_len, causal=False).transpose(0, 1)
                 generations, _ = decoder.generate(encoded, x_len, sample_temperature=None, max_len=params.max_generated_output_len) ##TODO: support beam search / sampling
                 generations = generations.transpose(0, 1)
 
             for dataset_id, name, generation in zip(np.arange(n_datasets), names, generations):
                 words = [output_id2word[tok.item()] for tok in generation]
-                assert words[0]=="<EOS>" and words[-1]=="<EOS>"  ##TODO: adapt when eval_batch_size > 1
+                while words[-1] == "<PAD>": words.pop(-1)
+                assert words[0]=="<EOS>" and words[-1]=="<EOS>"
                 try:
                     X, Y = samples["x"][dataset_id], samples["y"][dataset_id]
                     is_train = samples["is_train"][dataset_id] 
@@ -111,14 +113,13 @@ class Evaluator(object):
                     ytilde_test = decoded_expression.evaluate(xtest)
                     r2_train = stable_r2_score(ytrain, ytilde_train)
                     r2_test = stable_r2_score(ytest, ytilde_test)
-                    r2_test = np.nan
-                    failed = False
+                    failed = np.nan
 
-                except NodeParseError:
+                except (NodeParseError, ZeroDivisionError, OverflowError) as e:
                     prefix = ""
-                    r2_train = np.nan
-                    r2_test = np.nan
-                    failed = True
+                    r2_train = -np.inf
+                    r2_test = -np.inf
+                    failed = str(e)
 
                 result = {"dataset": name, "expression": prefix , "r2_train": r2_train, "r2_test": r2_test, "failed": failed, "time": time.time()-start_time}
                 if "expression" in samples:
@@ -130,7 +131,7 @@ class Evaluator(object):
         scores["r2_train_median"]=results_df["r2_train"].median()
         scores["r2_test_mean"]=results_df["r2_test"].mean()
         scores["r2_test_median"]=results_df["r2_test"].median()
-        scores["decoded_failed"]=results_df["failed"].mean()
+        scores["decoded_failed"]=(results_df["failed"].isna()).mean()
         if self.trainer.epoch % params.save_results_every == 0:
             eval_dir = Path(self.params.job_dir) / f"eval_{save_name}"
             os.makedirs(eval_dir, exist_ok=True)
@@ -191,7 +192,7 @@ if __name__ == "__main__":
 
     parser = get_parser()
     params = parser.parse_args()
-    params.reload_checkpoint = "/checkpoint/pakamienny/new_symbolicregression/paper/tokens_per_batch_10000_lr_0.0002_emb_emb_dim_512/2023-02-10_03-03-57/periodic-0.pth"
+    params.reload_checkpoint = "/checkpoint/pakamienny/new_symbolicregression/paper/tokens_per_batch_10000_lr_0.0002_accumulate_gradients_1/2023-02-13_02-12-10/periodic-0.pth"
     # params.reload_checkpoint = "/checkpoint/sdascoli/symbolicregression/shift_all/use_skeleton_True_use_sympy_False_tokens_per_batch_10000_n_enc_layers_4_n_dec_layers_16"
     # params.reload_checkpoint = "/checkpoint/sdascoli/symbolicregression/newgen/use_skeleton_False_use_sympy_False_tokens_per_batch_10000_n_enc_layers_4_n_dec_layers_16/"
     pk = pickle.load(open(Path(params.reload_checkpoint).parent / "params.pkl", "rb"))
@@ -202,26 +203,15 @@ if __name__ == "__main__":
 
     params.multi_gpu = False
     params.is_slurm_job = False
-    params.eval_on_pmlb = False  # True
-    params.eval_in_domain = True
-    params.n_observations = 100
-
+    params.eval_on_pmlb = True  # True
+    params.eval_in_domain = False
     params.batch_size_eval = 2
+    params.eval_size = 2
 
     params.local_rank = -1
     params.master_port = -1
     params.num_workers = 1
-    params.target_noise = 0.0
-    params.max_input_points = 200
-    params.random_state = 14423
-    params.max_number_bags = 10
-    params.save_results = False
-    params.eval_verbose_print = True
-    params.beam_size = 1
-    params.rescale = True
-    params.max_input_points = 200
-    params.pmlb_data_type = "black_box"
-    params.n_trees_to_refine = 10
+
     params.job_dir = params.dump_path
     print(f"Launching eval in {params.job_dir}")
     main(params)

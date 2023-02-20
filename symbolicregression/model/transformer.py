@@ -206,7 +206,6 @@ class TransformerModel(nn.Module):
         super().__init__()
 
         # encoder / decoder, output layer
-        self.dtype = torch.half if params.fp16 else torch.float
         self.is_encoder = is_encoder
         self.is_decoder = not is_encoder
         self.with_output = with_output
@@ -398,6 +397,7 @@ class TransformerModel(nn.Module):
 
         if self.position_embeddings is not None:
             tensor = tensor + self.position_embeddings(positions).expand_as(tensor)
+    
         tensor = self.layer_norm_emb(tensor)
         tensor = F.dropout(tensor, p=self.dropout, training=self.training)
         tensor *= mask.unsqueeze(-1).to(tensor.dtype)
@@ -507,7 +507,7 @@ class TransformerModel(nn.Module):
                 use_cache=True,
             )
             assert tensor.size() == (1, bs, self.dim)
-            tensor = tensor.data[-1, :, :].to(self.dtype)  # (bs, dim)  ##BE CAREFUL
+            tensor = tensor.data[-1, :, :].to(src_enc.dtype)  # (bs, dim)  ##BE CAREFUL
             scores = self.proj(tensor)  # (bs, n_words)
 
             # select next words: sample or greedy
@@ -618,7 +618,7 @@ class TransformerModel(nn.Module):
 
             assert tensor.size() == (1, bs * beam_size, self.dim)
             if self.apex:
-                tensor = tensor.data[-1, :, :].to(self.dtype)  # (bs * beam_size, dim)
+                tensor = tensor.data[-1, :, :].to(src_enc.dtype)  # (bs * beam_size, dim)
             else:
                 tensor = tensor.data[
                     -1, :, :

@@ -12,6 +12,7 @@ import io
 import sys
 import copy
 import json
+from turtle import xcor
 import pandas as pd
 import operator
 from typing import Optional, List, Dict, Tuple
@@ -21,9 +22,12 @@ import traceback
 from pathlib import Path
 # import math
 from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
 
 from symbolicregression.envs.function_utils import zip_dic, ZMQNotReady, ZMQNotReadySample
 from symbolicregression.envs import ExpressionGenerator, ExpressionGeneratorArgs, Node
+from symbolicregression.model.embedders import conv_out_len
+
 import numpy as np
 from typing import Optional, Dict
 import torch
@@ -64,7 +68,18 @@ def create_train_iterator(env, data_path, params, **args):
     logger.info(f"Creating train iterator")
 
     def size_fn(sample):
-        return (sample["is_train"].sum()) * (sample["x"].shape[1]+1)*3 
+
+        flat_size = (sample["is_train"].sum()) * ((sample["x"].shape[1]+1)*3 + 1 - int(params.use_emb_positional_embeddings))
+        if params.embedder_type == "flat":
+            return flat_size
+        elif params.embedder_type == "conv":
+            kernel_size = params.emb_conv_kernel
+            stride = params.emb_conv_stride
+            dilation = 1
+            padding = params.emb_conv_kernel-1
+            conv_size = conv_out_len([flat_size], kernel_size, stride, dilation, padding).item()
+            return conv_size
+
 
    # size_fn = lambda batch: batch
     dataset = EnvDataset(
@@ -117,7 +132,6 @@ def create_test_iterator(env, data_path, folder, params, **args):
         **args,
     )
     collate_fn = dataset.collate_fn   
-    print(params.batch_size_eval)
     return DataLoader(
         dataset,
         timeout=0,
@@ -151,6 +165,7 @@ class EnvDataset(Dataset):
         self.env_base_seed = params.env_base_seed
         self.path = path
         self.folder = folder
+        self.files = None
         self.count = 0
         self.remaining_data = 0
         self.type = type
@@ -359,12 +374,14 @@ class EnvDataset(Dataset):
                     )
         return after
 
-    def collate_fn(self, elements):
+    def collate_fn(self, data):
         """
         Collate samples into a batch.
         """
+        if data is None:
+            return None
 
-        samples = zip_dic(elements)
+        samples = zip_dic(data)
         return samples
 
     def init_rng(self):
@@ -413,9 +430,11 @@ class EnvDataset(Dataset):
         return self.size
 
     def init_folder(self, folder):
-        print(f"Reading {folder}")
+        if self.files is not None:
+            return
         self.files = list(Path(folder).glob("*/*.tsv.gz"))
-        
+        print(f"Read {folder}. Found {len(self.files)} datasets")
+
 
     def __getitem__(self, index):
         """
@@ -430,7 +449,10 @@ class EnvDataset(Dataset):
                 return self.read_sample(index)
         if self.folder != "":
             self.init_folder(self.folder)
-            sample = self.read_file(index)
+            try:
+                sample = self.read_file(index)
+            except IndexError:
+                return None
             return sample
 
         else:
@@ -442,9 +464,12 @@ class EnvDataset(Dataset):
 
 
     def generate_sample(self):
-        expr, (x, y) = self.env.get_sample(n_observations=self.params.n_observations+100, n_ops=self.params.max_ops, max_n_vars=self.params.max_vars)
-        is_train = np.full(self.params.n_observations+100, True)
-        is_train[self.params.n_observations:]=False
+        n_observations = np.random.randint(self.params.n_min_observations, self.params.n_max_observations)
+        n_ops = np.random.randint(self.params.min_ops, self.params.max_ops)
+        max_n_vars = np.random.randint(self.params.min_vars, self.params.max_vars+1)
+        expr, (x, y) = self.env.get_sample(n_observations=n_observations+100, n_ops=n_ops, max_n_vars=max_n_vars)
+        is_train = np.full(n_observations+100, True)
+        is_train[n_observations:]=False
         sample = {
             "name": f"generated_{rstr(8)}", 
             "expression": expr, 
@@ -462,15 +487,30 @@ class EnvDataset(Dataset):
     def read_file(self, index):
         file = self.files[index]
         name = file.name.split(".")[0]
-        x, y, _ = read_csv_file(str(file), nrows=10_000)
-        assert x.shape[1]<=10, f"Found more than 10 dim in {name}"
+        x, y, _ = read_csv_file(str(file), nrows=1_000)
+
+        feature_dim = x.shape[1]
+        assert feature_dim<=10, f"Found more than 10 dim in {name}"
+
+        if feature_dim > self.params.max_vars:
+            ##TODO: add feature selection
+            selected_features = np.random.choice(np.arange(feature_dim), size=self.params.max_vars, replace=False)
+            x = x[:, selected_features]
+
+        is_nan = np.isnan(x).any(axis=1)
+        x, y = x[~is_nan], y[~is_nan]
 
         train_or_valid_idxs, test_idxs = train_test_split(np.arange(len(x)), train_size=0.75, test_size=0.25, random_state=self.env.rng)
         is_train_or_valid = np.full(len(x), True)
         is_train_or_valid[test_idxs] = False
-        train_idxs = np.random.choice(train_or_valid_idxs, size=min(self.params.n_observations, len(train_or_valid_idxs)), replace=False)
+        train_idxs = np.random.choice(train_or_valid_idxs, size=min(self.params.n_max_observations, len(train_or_valid_idxs)), replace=False)
         is_train = np.full(len(x), False)
         is_train[train_idxs]=True
+
+        scaler = StandardScaler()
+        scaler.fit(x[train_or_valid_idxs])
+        x = scaler.transform(x)
+
         sample = {
             "name": name, 
             "x": x, 
@@ -478,6 +518,7 @@ class EnvDataset(Dataset):
             "is_train": is_train, 
             "is_train_or_valid": is_train_or_valid
             }
+
         return sample
 
 

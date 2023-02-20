@@ -7,6 +7,8 @@
 def zip_dic(lst):
     dico = {}
     for d in lst:
+        if d is None:
+            break
         for k in d:
             if k not in dico:
                 dico[k] = []
@@ -14,6 +16,8 @@ def zip_dic(lst):
     for k in dico:
         if isinstance(dico[k][0], dict):
             dico[k] = zip_dic(dico[k])
+    if dico == {}:
+        return None
     return dico
 
 

@@ -9,7 +9,7 @@ from logging import getLogger
 import os
 import torch
 
-from symbolicregression.model.embedders import FlatEmbedder
+from symbolicregression.model.embedders import FlatEmbedder, ConvEmbedder
 from symbolicregression.model.transformer import TransformerModel
 from symbolicregression.tokenizers import FloatTokenizer
 from symbolicregression.tokenizers import ExpressionTokenizer
@@ -36,13 +36,13 @@ def build_modules(env, params):
     """
     modules = {}
 
-    float_tokenizer = FloatTokenizer()
+    float_tokenizer = FloatTokenizer(replicate_special_tokens=params.pad_to_max_dim)
     expression_tokenizer = ExpressionTokenizer(precision=1)
 
     modules["input_tokenizer"]=float_tokenizer
     modules["output_tokenizer"]=expression_tokenizer
 
-    input_symbols = ["<EOS>", "<PAD>"]
+    input_symbols = ["<EOS>", "<PAD>", "SEP1", "SEP2", "SEP3"]
     output_symbols = ["<EOS>", "<PAD>"]
 
     input_symbols += float_tokenizer.get_symbols()
@@ -59,7 +59,10 @@ def build_modules(env, params):
     modules["output_id2word"]=output_id2word
     modules["output_word2id"]=output_word2id
 
-    modules["embedder_module"] = FlatEmbedder(float_tokenizer, word2id=input_word2id, dim=params.enc_emb_dim, use_cpu=params.cpu) #LinearPointEmbedder(params, env)
+    if params.embedder_type == "flat":
+        modules["embedder_module"] = FlatEmbedder(float_tokenizer, word2id=input_word2id, params=params)
+    elif params.embedder_type == "conv":
+        modules["embedder_module"] = ConvEmbedder(float_tokenizer, word2id=input_word2id, params=params)
 
     modules["encoder_module"] = TransformerModel(
         params,
@@ -88,6 +91,7 @@ def build_modules(env, params):
         logger.info(f"Reloading modules from {params.reload_model} ...")
         reloaded = torch.load(params.reload_model)
         for k, v in modules.items():
+            if not k.endswith("_module"): continue
             assert k in reloaded
             if all([k2.startswith("module.") for k2 in reloaded[k].keys()]):
                 reloaded[k] = {

@@ -7,7 +7,7 @@
 from logging import getLogger
 from symbolicregression.envs.generator import ExpressionGenerator, ExpressionGeneratorArgs
 from symbolicregression.envs.graph import Node, NodeParseError
-from symbolicregression.envs.new_environment import create_test_iterator, create_train_iterator
+from symbolicregression.envs.environment import create_test_iterator, create_train_iterator
 
 logger = getLogger()
 
@@ -16,6 +16,12 @@ def build_env(params):
     """
     Build environment.
     """
-    env_args = ExpressionGeneratorArgs()
-    env = ExpressionGenerator.build(args=env_args)
+    gen_args = ExpressionGeneratorArgs( 
+        n_vars=params.max_vars, 
+        unary_ops_str=params.unary_ops_str,
+        binary_ops_str=params.binary_ops_str,
+        leaf_probs_str=params.leaf_probs_str,
+        operators_upsample_str=params.operators_upsample_str    
+        )
+    env = ExpressionGenerator.build(args=gen_args)
     return env

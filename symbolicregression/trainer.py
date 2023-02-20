@@ -23,7 +23,7 @@ import torch.nn.functional as F
 import seaborn as sns
 import matplotlib.pyplot as plt
 import copy
-from symbolicregression.envs.new_environment import create_train_iterator, batch_expressions
+from symbolicregression.envs.environment import create_train_iterator, batch_expressions
 # if torch.cuda.is_available():
 has_apex = True
 try:
@@ -141,6 +141,7 @@ class Trainer(object):
         # float16 / distributed (AMP)
         self.scaler = None
         if params.amp >= 0:
+            
             self.init_amp()
             # if params.multi_gpu:
             #    logger.info("Using apex.parallel.DistributedDataParallel ...")
@@ -148,7 +149,7 @@ class Trainer(object):
             #        self.modules[k] = apex.parallel.DistributedDataParallel(
             #            self.modules[k], delay_allreduce=True
             #        )
-
+         
         # stopping criterion used for early stopping
         if params.stopping_criterion != "":
             split = params.stopping_criterion.split(",")
@@ -180,7 +181,7 @@ class Trainer(object):
         self.n_iter = 0
         self.n_total_iter = 0
         self.stats = OrderedDict(
-            [("Loss", [])]
+            [("loss", []), ("batch_size", [])]
             + [("processed_e", 0)]
             + [("processed_w", 0)]
         )
@@ -516,20 +517,16 @@ class Trainer(object):
         ):
             self.save_checkpoint("periodic-%i" % self.epoch)
 
-    def save_best_model(self, scores, prefix=None, suffix=None):
+    def save_best_model(self, scores, name):
         """
         Save best models according to given validation metrics.
         """
         if not self.params.is_master:
             return
+
         for metric, biggest in self.metrics:
-            _metric = metric
-            if prefix is not None:
-                _metric = prefix + "_" + _metric
-            if suffix is not None:
-                _metric = _metric + "_" + suffix
-            if _metric not in scores:
-                logger.warning('Metric "%s" not found in scores!' % _metric)
+            if metric not in scores:
+                logger.warning('Metric "%s" not found in scores!' % metric)
                 continue
             factor = 1 if biggest else -1
 
@@ -537,10 +534,10 @@ class Trainer(object):
                 best_so_far = factor * self.best_metrics[metric]
             else:
                 best_so_far = -np.inf
-            if factor * scores[_metric] > best_so_far:
-                self.best_metrics[metric] = scores[_metric]
-                logger.info("New best score for %s: %.6f" % (metric, scores[_metric]))
-                self.save_checkpoint("best-%s" % metric)
+            if factor * scores[metric] > best_so_far:
+                self.best_metrics[metric] = scores[metric]
+                logger.info("New best score for %s: %.6f" % (metric, scores[metric]))
+                self.save_checkpoint(f"best-{metric}_{name}" )
 
     def end_epoch(self, scores):
         """
@@ -622,9 +619,12 @@ class Trainer(object):
         expressions = samples["expression"]
         x = samples["x"]
         y = samples["y"]
+        is_train = samples["is_train"]
 
-        datasets = [np.concatenate([yi[:, None], xi], 1) for xi, yi in zip(x, y)] 
-        x1, len1 = embedder(datasets)
+        bs = len(x)
+
+        xys = [(xi[mask], yi[mask]) for xi, yi, mask in zip(x, y, is_train)] 
+        x1, len1 = embedder(xys)
         x2, len2 = batch_expressions(output_tokenizer, output_word2id, expressions)
 
         # target words to predict
@@ -671,7 +671,8 @@ class Trainer(object):
                 )
 
         # optimize
-        self.stats["Loss"].append(loss.item())
+        self.stats["loss"].append(loss.item())
+        self.stats["batch_size"].append(bs)
 
         self.optimize(loss)
 

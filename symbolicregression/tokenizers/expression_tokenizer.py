@@ -25,6 +25,8 @@ class ExpressionTokenizer(Tokenizer):
         return res
         
     def decode(self, tokens: List[str]) -> Node:
+        if len(tokens)==0:
+            raise NodeParseError("no tokens")
         prefix = []
         k = 0
         while k < len(tokens):

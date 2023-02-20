@@ -1,10 +1,11 @@
+from os import CLD_CONTINUED
 from typing import Optional, Tuple, List, Set, Dict
 from dataclasses import dataclass, field
 from functools import cached_property
 import numpy as np
 
 from symbolicregression.envs.graph import *
-from symbolicregression.envs.features import sample_features_from_uniform
+from symbolicregression.envs.features import sample_features_from_mixture, sample_features_from_uniform
 from symbolicregression.envs.rejector import check_constraints
 
 
@@ -19,6 +20,11 @@ class ExpressionGeneratorArgs():
         default="+,-,/,*",
         metadata={"help": "Binary operators. Empty string for all."},
     )
+    operators_upsample_str: str = field(
+        default="sin_0.2,cos_0.2,exp_0.2,log_0.2",
+        metadata={"help": "OPNAME_UpSampleFactor"},
+    )
+
     leaf_probs_str: str = field(
         default="0.5,0.5",
         metadata={
@@ -29,20 +35,20 @@ class ExpressionGeneratorArgs():
     @cached_property
     def unary_ops(self) -> List[str]:
         if self.unary_ops_str == "":
-            ops = SUPPORTED_UNARY_OPS
+            ops = list(SUPPORTED_UNARY_OPS.keys())
         else:
             ops = [x for x in self.unary_ops_str.split(",") if len(x) > 0]
-            assert all(op in SUPPORTED_UNARY_OPS for op in ops)
+            assert all(op in SUPPORTED_UNARY_OPS.keys() for op in ops)
         return ops
 
     @cached_property
     def binary_ops(self) -> List[str]:
         if self.binary_ops_str == "":
-            ops = SUPPORTED_BINARY_OPS
+            ops = list(SUPPORTED_BINARY_OPS.keys())
         else:
             ops = [x for x in self.binary_ops_str.split(",") if len(x) > 0]
             assert len(ops) == len(set(ops))
-            assert all(op in SUPPORTED_BINARY_OPS for op in ops), ops
+            assert all(op in SUPPORTED_BINARY_OPS.keys() for op in ops), ops
 
         return ops
 
@@ -53,6 +59,31 @@ class ExpressionGeneratorArgs():
         assert all(x >= 0 for x in p) and abs(sum(p) - 1) < 1e-7, p
         assert (self.n_vars > 0) == (p[1] > 0), f"got {self.n_vars} vars"
         return p[0], p[1]
+
+    def get_ops_probs(self, ops: List[str]) -> np.ndarray:
+        if self.operators_upsample_str == "":
+            probs = np.ones(len(ops)) / len(ops)
+            return probs
+        else:
+            ops_upsample = {op: 1.0 for op in ops}
+            for x in self.operators_upsample_str.split(","):
+                op, upsample = x.split("_")
+                if op in ops:
+                    ops_upsample[op] = float(upsample)
+            probs = np.array([ops_upsample[op] for op in ops])
+            probs = probs / probs.sum()
+            return probs
+
+    @property
+    def get_unary_probs(self) -> np.ndarray:
+        ops = self.unary_ops
+        return self.get_ops_probs(ops)
+
+
+    @property
+    def get_binary_probs(self) -> np.ndarray:
+        ops = self.binary_ops
+        return self.get_ops_probs(ops)
 
     def __post_init__(self):
         _ = self.unary_ops
@@ -68,6 +99,8 @@ class ExpressionGenerator:
         n_vars: int,
         unary_ops: List[str],
         binary_ops: List[str],
+        unary_ops_probs = np.ndarray,
+        binary_ops_probs = np.ndarray,
         leaf_probs: Tuple[float, float] = (
             0.0,
             1.0,
@@ -90,6 +123,8 @@ class ExpressionGenerator:
         # operators / tree distributions
         self.unary_ops = unary_ops
         self.binary_ops = binary_ops
+        self.unary_ops_probs = unary_ops_probs
+        self.binary_ops_probs = binary_ops_probs
 
         self.unary = len(self.unary_ops) > 0
         self.distrib = self.generate_dist(ExpressionGenerator.MAX_OPS)
@@ -106,6 +141,8 @@ class ExpressionGenerator:
             unary_ops=args.unary_ops,
             binary_ops=args.binary_ops,
             leaf_probs=args.leaf_probs,
+            unary_ops_probs=args.get_unary_probs,
+            binary_ops_probs=args.get_binary_probs,
             seed=seed,
         )
 
@@ -153,8 +190,10 @@ class ExpressionGenerator:
         Generate a random operator.
         """
         assert arity in [1, 2]
+        
         value = self.rng.choice(
             self.unary_ops if arity == 1 else self.binary_ops,
+            p=self.unary_ops_probs if arity == 1 else self.binary_ops_probs,
         )
         ntype = UNARY if arity == 1 else BINARY
         return ntype, value
@@ -274,8 +313,9 @@ class ExpressionGenerator:
                 continue
 
             ne_expr = expr.to_numexpr()
-            x = sample_features_from_uniform(self.rng, limits=(-10,10), feature_dim=max_n_vars, n=n_observations)
+            x = sample_features_from_mixture(self.rng, feature_dim=max_n_vars, n=n_observations)
             y = ne_expr({f"x_{i}" : x[:,i] for i in range(max_n_vars)})
+            
             if np.any(np.isnan(y)) or np.max(np.abs(y))>1e5:
                 continue
             break

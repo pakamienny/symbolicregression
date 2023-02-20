@@ -20,19 +20,8 @@ def get_parser():
         "--dump_path", type=str, default="", help="Experiment dump path"
     )
     parser.add_argument(
-        "--refinements_types",
-        type=str,
-        default="method=BFGS_batchsize=256_metric=/_mse",
-        help="What refinement to use. Should separate by _ each arg and value by =. None does not do any refinement",
-    )
-
-    parser.add_argument(
         "--eval_dump_path", type=str, default=None, help="Evaluation dump path"
     )
-    parser.add_argument(
-        "--save_results", type=bool, default=True, help="Should we save results?"
-    )
-
     parser.add_argument("--exp_name", type=str, default="debug", help="Experiment name")
     parser.add_argument(
         "--print_freq", type=int, default=100, help="Print every n steps"
@@ -55,18 +44,19 @@ def get_parser():
         default=-1,
         help="Use AMP wrapper for float16 / distributed / gradient accumulation. Level of optimization. -1 to disable.",
     )
-    parser.add_argument(
-        "--rescale", type=bool, default=True, help="Whether to rescale at inference.",
-    )
-
     # model parameters
     parser.add_argument(
         "--embedder_type",
         type=str,
-        default="LinearPoint",
+        default="conv",
         help="[TNet, LinearPoint, Flat, AttentionPoint] How to pre-process sequences before passing to a transformer.",
     )
-
+    parser.add_argument(
+        "--emb_conv_kernel", type=int, default=12, help="Embedder conv size"
+    )
+    parser.add_argument(
+        "--emb_conv_stride", type=int, default=12, help="Embedder conv stride"
+    )
     parser.add_argument(
         "--emb_emb_dim", type=int, default=64, help="Embedder embedding layer size"
     )
@@ -82,13 +72,13 @@ def get_parser():
     parser.add_argument(
         "--n_enc_layers",
         type=int,
-        default=2,
+        default=4,
         help="Number of Transformer layers in the encoder",
     )
     parser.add_argument(
         "--n_dec_layers",
         type=int,
-        default=16,
+        default=8,
         help="Number of Transformer layers in the decoder",
     )
     parser.add_argument(
@@ -299,7 +289,7 @@ def get_parser():
     parser.add_argument(
         "--beam_temperature",
         type=int,
-        default=0.1,
+        default=0.8,
         help="Beam temperature for sampling",
     )
 
@@ -333,7 +323,7 @@ def get_parser():
     parser.add_argument(
         "--validation_metrics",
         type=str,
-        default="r2_zero,r2,accuracy_l1_biggio,accuracy_l1_1e-3,accuracy_l1_1e-2,accuracy_l1_1e-1,_complexity",
+        default="r2_train_median",
         help="What metrics should we report? accuracy_tolerance/_l1_error/r2/_complexity/_relative_complexity/is_symbolic_solution",
     )
 
@@ -351,7 +341,7 @@ def get_parser():
         help="Should we evaluate with additional output noise",
     )
     parser.add_argument(
-        "--eval_size", type=int, default=10, help="Size of valid and test samples"
+        "--eval_size", type=int, default=100, help="Size of valid and test samples"
     )
     parser.add_argument(
         "--eval_noise_type",
@@ -387,7 +377,7 @@ def get_parser():
         default=-1,
         help="Compute accuracy for all input lengths modulo X. -1 is equivalent to no ablation",
     )
-    parser.add_argument("--eval_on_pmlb", type=bool, default=False)
+    parser.add_argument("--eval_on_pmlb", type=bool, default=True)
     parser.add_argument("--eval_in_domain", type=bool, default=True)
 
     # debug
@@ -427,6 +417,8 @@ def get_parser():
         help="in [precompute_batches, uniform_sampling, uniform_sampling_replacement]",
     )
 
+    parser.add_argument("--use_emb_positional_embeddings", type=bool, default=False)
+
     parser.add_argument("--collate_queue_size", type=int, default=2000)
     parser.add_argument(
             "--tokens_per_batch",
@@ -441,10 +433,49 @@ def get_parser():
             help="max size of tokenized sentences, 0 is no filtering",
         )
     parser.add_argument(
-        "--n_observations",
+        "--n_min_observations",
+        type=int,
+        default=20,
+        help="max number of observations",
+    )
+    parser.add_argument(
+        "--n_max_observations",
         type=int,
         default=100,
         help="max number of observations",
+    )
+
+    parser.add_argument(
+        "--unary_ops_str",
+        type=str,
+        default="",
+        help="Unary operators. Empty string for all.",
+    )
+    parser.add_argument(
+        "--binary_ops_str",
+        type=str,
+        default="",
+        help="Binary operators. Empty string for all.",
+    )
+    parser.add_argument(
+        "--leaf_probs_str",
+        type=str,
+        default="0.5,0.5",
+        help="Leaf probabilities (float, variable). Must sum to 1",
+    )
+    parser.add_argument(
+        "--operators_upsample_str",
+        type=str,
+        default="abs_0.2,inv_0.3,sin_0.5,cos_0.5,exp_0.2,log_0.2,tan_0.2,sqrt_0.3",
+        help="OPNAME_UpSampleFactor",
+    )
+
+
+    parser.add_argument(
+        "--min_ops",
+        type=int,
+        default=5,
+        help="max number of operators",
     )
     parser.add_argument(
         "--max_ops",
@@ -453,10 +484,23 @@ def get_parser():
         help="max number of operators",
     )
     parser.add_argument(
+        "--min_vars",
+        type=int,
+        default=1,
+        help="min number of variables",
+    )
+    parser.add_argument(
         "--max_vars",
         type=int,
         default=5,
         help="max number of variables",
+    )
+
+    parser.add_argument(
+        "--pad_to_max_dim",
+        type=bool,
+        default=True,
+        help="should we pad",
     )
     parser.add_argument(
         "--save_results_every",

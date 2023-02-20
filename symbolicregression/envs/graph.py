@@ -140,8 +140,10 @@ class Node:
     def to_numexpr(self):
 
         def evaluate_numexpr(infix, local_dict):
-            return numexpr.evaluate(infix, local_dict)
-
+            res =  numexpr.evaluate(infix, local_dict)
+            if res.ndim==0:
+                res = res * np.ones_like(list(local_dict.values())[0])
+            return res
         return partial(evaluate_numexpr, self.infix())
 
 
@@ -169,7 +171,12 @@ class Node:
 
     def evaluate(self, x, simulator="numexpr") -> np.ndarray:
         assert simulator in ["numexpr", "torch", "fast_eval"]
-        ##TODO: check dimension is correct compared to x.shape[1]
+        vars = self.get_vars()
+        if len(vars)>0: 
+            max_var = max(map(lambda x: int(x.split("_")[-1]), self.get_vars()))
+            if  max_var+1 > x.shape[1]:
+                raise NodeParseError("expression contains impossible variable")
+
         if simulator == "numexpr":
             ne_expr = self.to_numexpr()
             x_dico = {f"x_{i}" : x[:,i] for i in range(x.shape[1])}

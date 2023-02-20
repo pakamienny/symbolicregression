@@ -21,7 +21,7 @@ import datetime
 import train as classification
 import submitit
 
-FOLDER_NAME = "paper"
+FOLDER_NAME = "Feb17"
 
 def parse_args():
     classification_parser = classification.get_parser()
@@ -111,7 +111,9 @@ def main():
     grid = {
         "tokens_per_batch":[10000],
         'lr': [0.0002],
-        'accumulate_gradients':[1, 5],
+        'accumulate_gradients':[5],
+        'embedder_type':["conv"],
+        'use_emb_positional_embeddings':[False],
     }
 
     def dict_product(d):
@@ -122,9 +124,10 @@ def main():
     for params in dict_product(grid):
 
         args.master_port = np.random.randint(10001, 20000)
-        args.max_input_dimension = 10
         args.n_steps_per_epoch = 3000
         args.use_volta32 = True
+        args.amp = 1
+        args.fp16 = True
 
         name = "_".join(["{}_{}".format(k, v) for k, v in params.items()])
         job_dir = shared_folder / name 

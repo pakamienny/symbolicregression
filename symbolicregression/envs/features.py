@@ -3,6 +3,7 @@ from typing import List, Tuple, Union
 
 import numpy as np
 from scipy.stats import special_ortho_group
+from sklearn.preprocessing import StandardScaler
 
 class CustomDistribution(ABC):
     def __init__(self):
@@ -118,13 +119,14 @@ class CorrelatedUniform(CustomDistribution):
     def std(self) -> float:
         return self.b
 
-def sample_features_from_mixture(rng, feature_dim: int, n: int = None) -> np.ndarray:
+def sample_features_from_mixture(rng, feature_dim: int, n: int = None, normalize: bool = True) -> np.ndarray:
 
     distribution = MixtureOfDistributions(
         [CorrelatedGaussian(3, 5), CorrelatedUniform(3, 5)], [0.5, 0.5]
     )
     x = distribution.sample(rng, n=(n, feature_dim))
-    return x
+    scaler = StandardScaler()
+    return scaler.fit_transform(x)
 
 
 def sample_features_from_uniform(rng, limits: Tuple[float], feature_dim: int, n: int = None) -> np.ndarray:

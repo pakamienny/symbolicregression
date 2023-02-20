@@ -8,8 +8,8 @@ from functools import partial
 from scipy import optimize
 from torch.autograd import Variable
 
-from symbolicregression_env.envs.graph import Node
-from symbolicregression_env.envs.utils import *
+from symbolicregression.envs.graph import Node
+from symbolicregression.envs.utils import *
 
 
 def run_scipy_optimization(expr: Node, x: np.ndarray, y: np.ndarray, verbose: bool = False):
@@ -24,7 +24,7 @@ def run_scipy_optimization(expr: Node, x: np.ndarray, y: np.ndarray, verbose: bo
         return mse
     
     try:
-        result = minimize(objective_fn, init_values, method='BFGS', options={"maxiter": 10})
+        result = minimize(objective_fn, init_values, method='BFGS', options={"maxiter": 10, "disp": False})
     except ValueError:
         return expr
 
@@ -62,7 +62,7 @@ class TorchOptim():
             res = grad(partial(objective_torch))(torch.tensor(coeffs)).detach().numpy()
             return res
 
-        result = optimize.minimize(objective_numpy, x0=coeffs0, method='BFGS',  jac=grad_numpy, options={"maxiter": 10, "disp": verbose})
+        result = optimize.minimize(objective_numpy, x0=coeffs0, method='BFGS',  jac=grad_numpy, options={"maxiter": 10, "disp": False})
                     
         best_coeffs = result['x']
         if verbose:
