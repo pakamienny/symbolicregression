@@ -11,11 +11,6 @@ Using conda and the environment.yml file:
 
 ```conda env create --name symbolic regression --file=environment.yml```
 
-Also manually install a fork of sympytorch:
-
-```pip install git+https://github.com/pakamienny/sympytorch```
-
-
 ## Run the model
 
 To launch a model training use with additional arguments (arg1,val1), (arg2,val2):
@@ -64,3 +59,11 @@ If you want to reuse this material, please considering citing the following:
 ## License
 
 The majority of this repository is released under the Apache 2.0 license as found in the LICENSE file.
+
+
+## TODOS
+
+- try CLIP-style losses
+- try RLFH-style loss
+- improve synthetic generator with conditional distributions (either from beginning of the tree or leaves)
+- new architectures. move to xltransformer maybe

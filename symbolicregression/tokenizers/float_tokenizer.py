@@ -35,7 +35,7 @@ class FloatTokenizer(Tokenizer):
 
         self.zero_plus = ["S+", *["N" + "0" * self.base] * mantissa_len, "E0"]
         self.zero_minus = ["S-", *["N" + "0" * self.base] * mantissa_len, "E0"]
-
+        self.symbols.extend([NAN_TOKEN, INF_TOKEN, NEG_INF_TOKEN])
 
     def get_symbols(self) -> List[str]:
         return self.symbols

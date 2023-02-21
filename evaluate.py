@@ -115,7 +115,7 @@ class Evaluator(object):
                     r2_test = stable_r2_score(ytest, ytilde_test)
                     failed = np.nan
 
-                except (NodeParseError, ZeroDivisionError, OverflowError) as e:
+                except (NodeParseError, ZeroDivisionError, OverflowError, FloatingPointError) as e:
                     prefix = ""
                     r2_train = -np.inf
                     r2_test = -np.inf

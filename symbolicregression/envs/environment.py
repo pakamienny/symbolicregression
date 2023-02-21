@@ -24,8 +24,10 @@ from pathlib import Path
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 
-from symbolicregression.envs.function_utils import zip_dic, ZMQNotReady, ZMQNotReadySample
+from symbolicregression.envs.function_utils import zip_dic, ZMQNotReady, ZMQNotReadySample, TrainReader
 from symbolicregression.envs import ExpressionGenerator, ExpressionGeneratorArgs, Node
+from symbolicregression.envs.features import sample_features_from_mixture
+
 from symbolicregression.model.embedders import conv_out_len
 
 import numpy as np
@@ -189,39 +191,12 @@ class EnvDataset(Dataset):
         self.collate_queue_size = params.collate_queue_size
         self.tokens_per_batch = params.tokens_per_batch
 
-        # generation, or reloading from file
-        if path != "":
-            assert os.path.isfile(path), "{} not found".format(path)
-            if params.batch_load:
-                self.load_chunk()
-            else:
-                logger.info(f"Loading data from {path} ...")
-                with io.open(path, mode="r", encoding="utf-8") as f:
-                    # either reload the entire file, or the first N lines
-                    # (for the training set)
-                    if not train:
-                        lines = []
-                        for i, line in enumerate(f):
-                            lines.append(json.loads(line.rstrip()))
-                    else:
-                        lines = []
-                        for i, line in enumerate(f):
-                            if i == params.reload_size:
-                                break
-                            if i % params.n_gpu_per_node == params.local_rank:
-                                # lines.append(line.rstrip())
-                                lines.append(json.loads(line.rstrip()))
-                # self.data = [xy.split("=") for xy in lines]
-                # self.data = [xy for xy in self.data if len(xy) == 3]
-                self.data = lines
-                logger.info(f"Loaded {len(self.data)} equations from the disk.")
-
         # dataset size: infinite iterator for train, finite for valid / test
         # (default of 10000 if no file provided)
         if self.train:
             self.size = 1 << 60
         elif size is None:
-            self.size = 10000 if path == "" else len(self.data)
+            self.size = 10_000
         else:
             assert size > 0
             self.size = size
@@ -293,11 +268,7 @@ class EnvDataset(Dataset):
             if self.path == "":
                 sample = self.generate_sample()
             else:
-                ##TODO
-                assert (
-                    False
-                ), "need to finish implementing load dataset, but do not know how to handle read index"
-                sample = self.read_sample(index)
+                sample = self.read_sample()
             self.collate_queue.append(sample)
 
         # sort sequences
@@ -443,10 +414,12 @@ class EnvDataset(Dataset):
         """
         self.init_rng()
         if self.path != "":
+
             if self.train and self.skip:
                 return SKIP_ITEM
             else:
-                return self.read_sample(index)
+                return self.read_sample()
+
         if self.folder != "":
             self.init_folder(self.folder)
             try:
@@ -480,9 +453,39 @@ class EnvDataset(Dataset):
             }
         return sample
 
-    def read_sample(self, index):
-        raise NotImplementedError
+    def read_sample(self):
 
+        if not hasattr(self, "train_reader"):
+            self.train_reader = TrainReader(
+                paths=list(Path(self.path).glob("shard.*.jsonl")),
+                rng=self.env.rng,
+                buffer_size=10_000,
+                shuffle=True,
+                start=max(0, self.params.global_rank),
+                step=max(1, self.params.world_size),
+                debug=True
+            )
+
+        line = next(self.train_reader)
+        sample = json.loads(line)
+        n_observations = np.random.randint(self.params.n_min_observations, self.params.n_max_observations)
+        is_train = np.full(n_observations, True)
+
+        expr = Node.from_prefix(sample["prefix"])
+        ne_expr = expr.to_numexpr()
+        x = sample_features_from_mixture(self.env.rng, feature_dim=len(sample["x"]), n=n_observations)
+        y = ne_expr({f"x_{i}" : x[:,i] for i in range(len(sample["x"]))})
+            
+        sample.update({
+            "name": f"generated_{rstr(8)}", 
+            "expression": expr, 
+            "x": x, 
+            "y": y, 
+            "is_train": is_train,
+            "is_train_or_valid": is_train
+            })
+
+        return sample
 
     def read_file(self, index):
         file = self.files[index]

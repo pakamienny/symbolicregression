@@ -190,39 +190,10 @@ class Trainer(object):
         # reload potential checkpoints
         self.reload_checkpoint(path=path, root=root)
 
-        # file handler to export data
-        if params.export_data:
-            assert params.reload_data == ""
-            params.export_path_prefix = os.path.join(params.dump_path, "data.prefix")
-            self.file_handler_prefix = io.open(
-                params.export_path_prefix, mode="a", encoding="utf-8"
-            )
-            logger.info(
-                f"Data will be stored in prefix in: {params.export_path_prefix} ..."
-            )
-
         # reload exported data
         if params.reload_data != "":
-            logger.info(params.reload_data)
-            # assert params.num_workers in [0, 1] ##TODO: why have that?
-            assert params.export_data is False
-            s = [x.split(",") for x in params.reload_data.split(";") if len(x) > 0]
-            assert (
-                len(s)
-                >= 1
-                # and all(len(x) == 4 for x in s) ##if we want multiple datasets
-                # and len(s) == len(set([x[0] for x in s]))
-            )
-            self.data_path = ""
-
-            logger.info(self.data_path)
-
-            # assert all(
-            #    all(os.path.isfile(path) for path in paths)
-            #    for paths in self.data_path.values()
-            # )
-            for task in self.env.TRAINING_TASKS:
-                assert (task in self.data_path) == (task in params.tasks)
+            logger.info(f"Will reload {params.reload_data} folder")
+            self.data_path = params.reload_data
         else:
             self.data_path = ""
 
@@ -232,22 +203,6 @@ class Trainer(object):
                 params.env_base_seed = np.random.randint(1_000_000_000)
 
             self.dataloader = iter(create_train_iterator(self.env, self.data_path, params))
-        
-
-    def set_new_train_iterator_params(self, args={}):
-        params = self.params
-        if params.env_base_seed < 0:
-            params.env_base_seed = np.random.randint(1_000_000_000)
-        self.dataloader = {
-            task: iter(
-                self.env.create_train_iterator(task, self.data_path, params, args)
-            )
-            for task in params.tasks
-        }
-        logger.info(
-            "Succesfully replaced training iterator with following args:{}".format(args)
-        )
-        return
 
     def set_parameters(self):
         """
@@ -622,7 +577,7 @@ class Trainer(object):
         is_train = samples["is_train"]
 
         bs = len(x)
-
+       
         xys = [(xi[mask], yi[mask]) for xi, yi, mask in zip(x, y, is_train)] 
         x1, len1 = embedder(xys)
         x2, len2 = batch_expressions(output_tokenizer, output_word2id, expressions)

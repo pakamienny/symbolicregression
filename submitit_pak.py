@@ -21,7 +21,7 @@ import datetime
 import train as classification
 import submitit
 
-FOLDER_NAME = "Feb17"
+FOLDER_NAME = "Feb20"
 
 def parse_args():
     classification_parser = classification.get_parser()
@@ -41,7 +41,7 @@ def parse_args():
 
     parser.add_argument(
         "--partition",
-        default="devlab,learnlab",
+        default="learnlab",
         type=str,
         help="Partition where to submit",
     )
@@ -111,9 +111,9 @@ def main():
     grid = {
         "tokens_per_batch":[10000],
         'lr': [0.0002],
-        'accumulate_gradients':[5],
-        'embedder_type':["conv"],
-        'use_emb_positional_embeddings':[False],
+        'accumulate_gradients':[1],
+        'embedder_type':["conv", "flat"],
+        'use_emb_positional_embeddings':[False, True],
     }
 
     def dict_product(d):
@@ -125,10 +125,8 @@ def main():
 
         args.master_port = np.random.randint(10001, 20000)
         args.n_steps_per_epoch = 3000
-        args.use_volta32 = True
-        args.amp = 1
-        args.fp16 = True
-
+        args.use_volta32 = False #True
+        args.reload_data = "/checkpoint/pakamienny/sr_opensource/dataset"
         name = "_".join(["{}_{}".format(k, v) for k, v in params.items()])
         job_dir = shared_folder / name 
         Path(job_dir).mkdir(exist_ok=True)

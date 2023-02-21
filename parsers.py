@@ -236,7 +236,7 @@ def get_parser():
         "--reload_data",
         type=str,
         default="",
-        help="Load dataset from the disk (task1,train_path1,valid_path1,test_path1;task2,train_path2,valid_path2,test_path2)",
+        help="folder",
     )
     parser.add_argument(
         "--reload_size",
